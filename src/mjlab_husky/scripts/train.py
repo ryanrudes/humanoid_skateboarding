@@ -44,6 +44,16 @@ class TrainConfig:
 
 
 def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
+  # Populate the task registry in worker processes. Under multi-GPU, torchrunx
+  # ships this function to workers via cloudpickle (by value), so this module's
+  # top-level imports -- which normally trigger task registration through
+  # mjlab_husky.tasks/__init__.py's import_packages() -- do not run in the
+  # worker. Without this, load_runner_cls() below raises KeyError. Import envs
+  # first (mirroring this module's top-level import order) so the task configs
+  # can resolve G1SkaterManagerBasedRlEnvCfg without a circular import.
+  import mjlab_husky.envs  # noqa: F401
+  import mjlab_husky.tasks  # noqa: F401
+
   cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
   if cuda_visible == "":
     device = "cpu"
