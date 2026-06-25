@@ -57,14 +57,22 @@ class G1_AMPLoader:
             preload_transitions=False,
             num_preload_transitions=1000000,
             num_frames=5,
+            amp_obs_slices=((7, 26), (29, 33)),
         ):
         """Expert dataset provides AMP observations from Dog mocap dataset.
 
         time_between_frames: Amount of time in seconds between transition.
+        amp_obs_slices: column ranges (into the processed frame) that form the AMP
+            observation. The default selects the 23 G1 joints used by the 23-DoF
+            policy; pass e.g. ((7, 38),) to use all 31 X2 joints. The total width
+            must equal the policy's amp_num_obs.
         """
         self.device = device
         self.time_between_frames = time_between_frames
         self.num_frames = num_frames
+        self.amp_obs_slices = [tuple(s) for s in amp_obs_slices]
+        # Width of one processed motion frame (7 base + n_dof); set from the data.
+        self.frame_width = 36
         
         # Values to store for each trajectory.
         self.trajectories = []
@@ -81,18 +89,12 @@ class G1_AMPLoader:
             self.trajectory_names.append(motion_file)
             motion_path = pjoin(motion_files, motion_file)
             motion_data = np.load(motion_path, allow_pickle=True)
-            motion_data_processed = np.zeros((motion_data.shape[0],36))
-            
-            for f_i in range(motion_data.shape[0]):
-                motion_data_processed[f_i, :3] = motion_data[f_i, :3]   # base pos
-                motion_data_processed[f_i, 3:7] = motion_data[f_i, 3:7]  # base quat   (wxyz)
-                motion_data_processed[f_i, 7:35] = motion_data[f_i, 7:35]  # base vel
-                '''
-                NOTE The order of motion_data_processed is
-                base pos 0:3,
-                base quat 3:7,  wxyz
-                dof pos  7:36,  (mujoco joint order)
-                '''
+            frame_width = motion_data.shape[1]
+            self.frame_width = frame_width
+            motion_data_processed = np.zeros((motion_data.shape[0], frame_width))
+            # Layout: base pos 0:3, base quat 3:7 (wxyz), dof pos 7:frame_width
+            # (mujoco joint order). G1 clips are 36-wide (29 dof); X2 are 38 (31).
+            motion_data_processed[:, :frame_width] = motion_data[:, :frame_width]
             self.trajectories.append(torch.tensor(
                 motion_data_processed[:, 7:],
                 dtype=torch.float32,
@@ -139,10 +141,9 @@ class G1_AMPLoader:
                 frame_time = times + (i - (self.num_frames - 2)) * self.time_between_frames
                 full_frame = self.get_full_frame_at_time_batch(traj_idxs, frame_time)
                 # 预处理：提前提取并连接需要的列（7:26 和 29:33），避免每次生成时重复切片
-                processed_frame = torch.cat([
-                    full_frame[:, 7:26],
-                    full_frame[:, 29:33]
-                ], dim=-1)
+                processed_frame = torch.cat(
+                    [full_frame[:, a:b] for (a, b) in self.amp_obs_slices], dim=-1
+                )
                 self.preloaded_frames.append(processed_frame)
             print(f'Finished preloading multiple frames')
 
@@ -222,8 +223,9 @@ class G1_AMPLoader:
         all_frame_pos_ends = torch.zeros(len(traj_idxs), 3, device=self.device)
         all_frame_rot_starts = torch.zeros(len(traj_idxs), 4, device=self.device)
         all_frame_rot_ends = torch.zeros(len(traj_idxs), 4, device=self.device)
-        all_frame_amp_starts = torch.zeros(len(traj_idxs), 29, device=self.device)
-        all_frame_amp_ends = torch.zeros(len(traj_idxs),  29, device=self.device)
+        amp_w = self.frame_width - 7
+        all_frame_amp_starts = torch.zeros(len(traj_idxs), amp_w, device=self.device)
+        all_frame_amp_ends = torch.zeros(len(traj_idxs),  amp_w, device=self.device)
         for traj_idx in set(traj_idxs):
             trajectory = self.trajectories_full[traj_idx]
             traj_mask = traj_idxs == traj_idx
@@ -231,8 +233,8 @@ class G1_AMPLoader:
             all_frame_pos_ends[traj_mask] = G1_AMPLoader.get_root_pos_batch(trajectory[idx_high[traj_mask]])
             all_frame_rot_starts[traj_mask] = G1_AMPLoader.get_root_rot_batch(trajectory[idx_low[traj_mask]])
             all_frame_rot_ends[traj_mask] = G1_AMPLoader.get_root_rot_batch(trajectory[idx_high[traj_mask]])
-            all_frame_amp_starts[traj_mask] = trajectory[idx_low[traj_mask]][:, 7:36] # base vel3+ang3, dof vel23+ang23
-            all_frame_amp_ends[traj_mask] = trajectory[idx_high[traj_mask]][:, 7:36]  # base vel3+ang3, dof vel23+ang23
+            all_frame_amp_starts[traj_mask] = trajectory[idx_low[traj_mask]][:, 7:self.frame_width]
+            all_frame_amp_ends[traj_mask] = trajectory[idx_high[traj_mask]][:, 7:self.frame_width]
         blend = torch.tensor(p * n - idx_low, device=self.device, dtype=torch.float32).unsqueeze(-1)
         pos_blend = self.slerp(all_frame_pos_starts, all_frame_pos_ends, blend)
         rot_blend = quaternion_slerp(all_frame_rot_starts, all_frame_rot_ends, blend)

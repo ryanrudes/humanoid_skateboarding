@@ -16,3 +16,11 @@ video
 wandb
 logs
 agents
+
+# Claude Code local config / worktrees
+.claude
+
+# Generated standalone scene for test_scene/sim.py (regenerate with
+# scripts/gen_scene_xml.py --robot x2); the meshes duplicate asset_zoo.
+test_scene/x2_assets
+test_scene/mjlab_scene_x2.xml

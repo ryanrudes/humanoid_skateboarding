@@ -113,12 +113,21 @@ class RslRlOnPolicyRunnerCfg(RslRlBaseRunnerCfg):
 
 @dataclass
 class RslRlAMPOnPolicyRunnerCfg(RslRlOnPolicyRunnerCfg):
+  amp_enabled: bool = True
+  """Whether to use Adversarial Motion Priors for the push phase. If False, the
+  discriminator and motion loader are not built, no AMP reward is injected, and
+  the push phase is shaped purely by the task ``push_rewards``. Lets the task
+  train without any push mocap clips."""
   amp_num_obs: int = 23
   amp_num_frames: int = 5
   use_lerp: bool = False
   amp_task_reward_lerp: float = 0.7
   amp_reward_coef: float = 5.0
   amp_motion_files: str = "dataset/skate_push"
+  amp_obs_slices: Tuple[Tuple[int, int], ...] = ((7, 26), (29, 33))
+  """Column ranges (into a processed motion frame) selecting the AMP-observed
+  joints. Default selects the 23 G1 joints; X2 uses ((7, 38),) for all 31. Total
+  width must equal amp_num_obs."""
   amp_num_preload_transitions: int = 200000
   amp_discr_hidden_dims: Tuple[int, ...] = (256, 256)
   min_normalized_std: Tuple[float, ...] = (0.05,) * 20

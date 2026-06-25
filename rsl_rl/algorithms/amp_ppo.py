@@ -12,7 +12,7 @@ from copy import deepcopy
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from itertools import chain
+from itertools import chain, repeat
 
 from rsl_rl.modules import ActorCritic
 from rsl_rl.modules.rnd import RandomNetworkDistillation
@@ -54,7 +54,11 @@ class AMP_PPO:
         symmetry_cfg: dict | None = None,
         # Distributed training parameters
         multi_gpu_cfg: dict | None = None,
+        # Adversarial Motion Priors toggle. When False, no discriminator/expert
+        # loss is computed and the push phase is shaped purely by task rewards.
+        amp_enabled: bool = True,
     ):
+        self.amp_enabled = amp_enabled
         # device-related parameters
         self.device = device
         self.is_multi_gpu = multi_gpu_cfg is not None
@@ -243,15 +247,20 @@ class AMP_PPO:
             generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
 
 
-        amp_policy_generator = self.amp_storage.feed_forward_generator(
-            self.num_learning_epochs * self.num_mini_batches,
-            self.storage.num_envs * self.storage.num_transitions_per_env // self.num_mini_batches,
-        )
+        if self.amp_enabled:
+            amp_policy_generator = self.amp_storage.feed_forward_generator(
+                self.num_learning_epochs * self.num_mini_batches,
+                self.storage.num_envs * self.storage.num_transitions_per_env // self.num_mini_batches,
+            )
 
-        amp_expert_generator = self.amp_data.feed_forward_generator_23dof_multi(
-            self.num_learning_epochs * self.num_mini_batches,
-            self.storage.num_envs * self.storage.num_transitions_per_env // self.num_mini_batches,
-        )
+            amp_expert_generator = self.amp_data.feed_forward_generator_23dof_multi(
+                self.num_learning_epochs * self.num_mini_batches,
+                self.storage.num_envs * self.storage.num_transitions_per_env // self.num_mini_batches,
+            )
+        else:
+            # AMP disabled: no discriminator training; iterate PPO mini-batches only.
+            amp_policy_generator = repeat(None)
+            amp_expert_generator = repeat(None)
 
         # iterate over batches
         for sample, sample_amp_policy, sample_amp_expert in zip(generator, amp_policy_generator, amp_expert_generator):
@@ -420,36 +429,43 @@ class AMP_PPO:
                 mseloss = torch.nn.MSELoss()
                 rnd_loss = mseloss(predicted_embedding, target_embedding)
 
-            expert_states = sample_amp_expert
-            policy_states = sample_amp_policy
+            if self.amp_enabled:
+                expert_states = sample_amp_expert
+                policy_states = sample_amp_policy
 
-            with torch.no_grad():
-                expert_states = self.amp_normalizer.normalize_torch(expert_states.to(self.device), self.device)
-                policy_states = self.amp_normalizer.normalize_torch(policy_states, self.device)
-                
-            contact_phase_push = obs_batch['critic'][:, -4]
-            mask_push = contact_phase_push == 1.
+                with torch.no_grad():
+                    expert_states = self.amp_normalizer.normalize_torch(expert_states.to(self.device), self.device)
+                    policy_states = self.amp_normalizer.normalize_torch(policy_states, self.device)
 
-            if mask_push.any():
-                policy_d = self.discriminator(policy_states.flatten(1))
-                expert_states = expert_states.to(self.device)
-                expert_d = self.discriminator(expert_states.flatten(1))
+                contact_phase_push = obs_batch['critic'][:, -4]
+                mask_push = contact_phase_push == 1.
 
-                expert_loss = torch.nn.MSELoss()(expert_d, torch.ones(expert_d.size(), device=self.device))
-                policy_loss = torch.nn.MSELoss()(policy_d, -1 * torch.ones(policy_d.size(), device=self.device))
-                amp_loss = 0.5 * (expert_loss + policy_loss)
+                if mask_push.any():
+                    policy_d = self.discriminator(policy_states.flatten(1))
+                    expert_states = expert_states.to(self.device)
+                    expert_d = self.discriminator(expert_states.flatten(1))
 
-                # grad penalty
-                grad_pen_loss = self.discriminator.compute_grad_pen(expert_states, lambda_=5)
+                    expert_loss = torch.nn.MSELoss()(expert_d, torch.ones(expert_d.size(), device=self.device))
+                    policy_loss = torch.nn.MSELoss()(policy_d, -1 * torch.ones(policy_d.size(), device=self.device))
+                    amp_loss = 0.5 * (expert_loss + policy_loss)
+
+                    # grad penalty
+                    grad_pen_loss = self.discriminator.compute_grad_pen(expert_states, lambda_=5)
+                else:
+                    amp_loss = torch.tensor(0.0, device=self.device)
+                    grad_pen_loss = torch.tensor(0.0, device=self.device)
+                    expert_loss = torch.tensor(0.0, device=self.device)
+                    policy_loss = torch.tensor(0.0, device=self.device)
+
+                loss += (amp_loss + grad_pen_loss)
+                self.amp_normalizer.update(policy_states.cpu().numpy())
+                self.amp_normalizer.update(expert_states.cpu().numpy())
             else:
+                # AMP disabled: discriminator contributes nothing to the loss.
                 amp_loss = torch.tensor(0.0, device=self.device)
                 grad_pen_loss = torch.tensor(0.0, device=self.device)
                 expert_loss = torch.tensor(0.0, device=self.device)
                 policy_loss = torch.tensor(0.0, device=self.device)
-
-            loss += (amp_loss + grad_pen_loss)
-            self.amp_normalizer.update(policy_states.cpu().numpy())
-            self.amp_normalizer.update(expert_states.cpu().numpy())
 
             # Compute the gradients
             # -- For PPO

@@ -11,10 +11,25 @@ readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "mjlab",
+    # Pin mujoco to the last stable release that still defines the
+    # `mjtEnableBit.mjENBL_MULTICCD` enum. mujoco 3.8.0 removed it (multi-CCD
+    # became default-on via `mjtDisableBit.mjDSBL_MULTICCD`), which breaks both
+    # the pinned mjlab (13212ad, sim/sim.py) and mujoco_warp (1dc288c,
+    # _src/types.py) at import / sim-build time. See the `mujoco` entry under
+    # `[tool.uv.sources]` for why it is fetched from PyPI by URL.
+    "mujoco==3.7.0",
     "onnxruntime",
     "pybullet",
     "rsl-rl-lib",
-    "pynput"
+    "pynput",
+    # mjlab (13212ad) imports scipy in mjlab.terrains but never declares it as a
+    # dependency, so it must be provided explicitly here.
+    "scipy",
+    # torch/torchvision are only transitive deps (via mjlab/rsl_rl); they are
+    # listed here as direct deps so the cu128 `[tool.uv.sources]` routing below
+    # takes effect (uv only applies sources to a project's direct dependencies).
+    "torch",
+    "torchvision",
 ]
 
 [project.entry-points."mjlab.tasks"]
@@ -28,6 +43,46 @@ play = "mjlab_husky.scripts.play:main"
 src = ["src"]  # Helpful for recognizing first-party imports.
 indent-width = 4
 
+# mjlab pins mujoco_warp to an unreleased commit (1dc288c) that targets a
+# since-pruned mujoco nightly -- its put_model() reads MjData.flexedge_J_rownnz,
+# a field stable mujoco exposes on MjModel, not MjData. uv won't let a root
+# project re-route a dependency's git pin via [tool.uv.sources] ("conflicting
+# URLs"), so force the matching mujoco_warp 3.7.0 release (pairs with mujoco
+# 3.7.0; reads flexedge_J_rownnz from MjModel) with an override instead.
+[tool.uv]
+override-dependencies = [
+  "mujoco-warp @ https://files.pythonhosted.org/packages/35/71/7deec6a72e0de526bfaf695e98e07cb0c6828a712e5ab7ee1743b8e4a909/mujoco_warp-3.7.0-py3-none-any.whl",
+  # mjlab (13212ad, sim/sim.py) calls wp.context.runtime.driver_version, but
+  # warp-lang removed the public `warp.context` namespace in 1.13+, and mjlab
+  # routes warp-lang to the NVIDIA nightly index (which now serves 1.15.0.dev).
+  # Pin the last 1.12.x release: it keeps wp.context.runtime and satisfies
+  # mujoco_warp 3.7.0's warp-lang>=1.12. (Linux x86_64 wheel; py3, all CPython.)
+  "warp-lang @ https://files.pythonhosted.org/packages/52/79/c30d6f57c98cc5bb850eb0bd0fce2405abb79a368ed5ef65ebb2b0c58dc0/warp_lang-1.12.1-py3-none-manylinux_2_28_x86_64.whl",
+]
+
+# torch/torchvision: mjlab intends CUDA 12.8 wheels (it declares a pytorch-cu128
+# index), but that routing is gated behind a "cu128" extra this project does not
+# request, so torch otherwise resolves to PyPI's +cu130 (CUDA 13.0) build, which
+# a 570.x / CUDA 12.8 driver is too old to run. Route them to the cu128 index so
+# the wheels match the driver. (cu128 currently tops out at torch 2.11.x.)
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
 [tool.uv.sources]
 mjlab = { git = "https://github.com/mujocolab/mjlab.git", rev = "13212ad" }
-rsl-rl-lib = { path = "rsl_rl" }
+rsl-rl-lib = { path = "rsl_rl", editable = true }
+torch = { index = "pytorch-cu128", marker = "sys_platform != 'darwin'" }
+torchvision = { index = "pytorch-cu128", marker = "sys_platform != 'darwin'" }
+# mjlab and mujoco_warp both pin `mujoco` to the py.mujoco.org nightly index
+# (via their own [tool.uv.sources]/[[tool.uv.index]]), and that index only keeps
+# recent nightlies (>=3.8.1.dev) -- all of which dropped mjENBL_MULTICCD. uv does
+# not let a root project re-route a dependency's pinned index (it raises
+# "conflicting indexes for package mujoco"), so we point mujoco directly at the
+# stable 3.7.0 wheels on PyPI, which a URL source is allowed to override.
+# Linux x86_64 (this repo's CUDA target); add aarch64/macos wheel URLs here if needed.
+mujoco = [
+  { url = "https://files.pythonhosted.org/packages/97/fa/a8698b7bb0168483845f8e492991ee5cf01695eb0d1f20ea7d8bf3d61344/mujoco-3.7.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", marker = "python_full_version < '3.13'" },
+  { url = "https://files.pythonhosted.org/packages/0f/de/4ebdd81f66f2d3879335e0f21f7be9b552d7edbc80c53f31472706d4e338/mujoco-3.7.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", marker = "python_full_version >= '3.13'" },
+]

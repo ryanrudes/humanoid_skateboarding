@@ -43,16 +43,27 @@ class AMPOnPolicyRunner:
             default_sets.append("rnd_state")
         self.cfg["obs_groups"] = resolve_obs_groups(obs, self.cfg["obs_groups"], default_sets)
 
-        self.amp_data = G1_AMPLoader(
-            device,
-            time_between_frames=1/50.0,
-            preload_transitions=True,
-            num_preload_transitions=train_cfg["amp_num_preload_transitions"],
-            motion_files=train_cfg["amp_motion_files"],
-            num_frames=train_cfg['amp_num_frames']
-        )
-           
-        self.amp_observation_dim = self.amp_data.observation_dim if self.cfg["amp_num_obs"] == 0 else self.cfg["amp_num_obs"]
+        self.amp_enabled = train_cfg.get("amp_enabled", True)
+        if self.amp_enabled:
+            self.amp_data = G1_AMPLoader(
+                device,
+                time_between_frames=1/50.0,
+                preload_transitions=True,
+                num_preload_transitions=train_cfg["amp_num_preload_transitions"],
+                motion_files=train_cfg["amp_motion_files"],
+                num_frames=train_cfg['amp_num_frames'],
+                amp_obs_slices=train_cfg.get("amp_obs_slices", ((7, 26), (29, 33))),
+            )
+        else:
+            # AMP disabled: skip the motion loader entirely (no clips required).
+            self.amp_data = None
+
+        if self.cfg["amp_num_obs"] != 0:
+            self.amp_observation_dim = self.cfg["amp_num_obs"]
+        elif self.amp_data is not None:
+            self.amp_observation_dim = self.amp_data.observation_dim
+        else:
+            raise ValueError("amp_num_obs must be non-zero when amp_enabled=False")
         self.amp_num_frames = 0 if self.cfg["amp_num_frames"] == 0 else self.cfg["amp_num_frames"]
         self.amp_normalizer = Normalizer(self.amp_observation_dim)
         self.discriminator = DiscriminatorMulti(
@@ -148,7 +159,7 @@ class AMPOnPolicyRunner:
                     amp_reward = torch.zeros(self.env.num_envs, device=obs.device)
 
                     mask = self.env.contact_phase[:, 0] == 1.0
-                    if mask.any():
+                    if self.amp_enabled and mask.any():
                         rewards[mask], logit, disc_reward = self.alg.discriminator.predict_amp_reward(
                             self.amp_obs_frames[mask], rewards[mask], normalizer=self.alg.amp_normalizer
                         )
@@ -483,7 +494,7 @@ class AMPOnPolicyRunner:
         # initialize the algorithm
         alg_class = eval(self.alg_cfg.pop("class_name"))
         
-        alg: AMP_PPO = alg_class(actor_critic, self.discriminator, self.amp_data, self.amp_normalizer, self.amp_num_frames, device=self.device, **self.alg_cfg, multi_gpu_cfg=self.multi_gpu_cfg)
+        alg: AMP_PPO = alg_class(actor_critic, self.discriminator, self.amp_data, self.amp_normalizer, self.amp_num_frames, device=self.device, **self.alg_cfg, multi_gpu_cfg=self.multi_gpu_cfg, amp_enabled=self.amp_enabled)
 
         # initialize the storage
         alg.init_storage(

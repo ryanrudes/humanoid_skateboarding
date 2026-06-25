@@ -34,6 +34,10 @@ class G1SkaterManagerBasedRlEnvCfg(ManagerBasedRlEnvCfg):
   beizer_names: list[str] = field(default_factory=list)
   slerp_names: list[str] = field(default_factory=list)
   steer_init_pos: list[float] = field(default_factory=list)
+  push_ref_pose_path: str = "dataset/ref_pose/push_start_pose_b.npy"
+  """Per-body push start pose in the skateboard frame, shape (num_bodies, 7). Robot-specific."""
+  steer_ref_pose_path: str = "dataset/ref_pose/steer_start_pose_b.npy"
+  """Per-body steer start pose in the skateboard frame, shape (num_bodies, 7). Robot-specific."""
   rake_angle: float = 60.0
   eval_mode: bool = False
   """Whether in evaluation mode. If True, will save metrics to JSON and exit after all episodes complete."""
@@ -133,8 +137,8 @@ class G1SkaterManagerBasedRlEnv(ManagerBasedRlEnv):
     self.phase_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long, requires_grad=False)
     self.still = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
     
-    push_init_body_pose = torch.from_numpy(np.load("dataset/ref_pose/push_start_pose_b.npy")).to(self.device).repeat(self.num_envs, 1 , 1)
-    steer_init_body_pose = torch.from_numpy(np.load("dataset/ref_pose/steer_start_pose_b.npy")).to(self.device).repeat(self.num_envs, 1 , 1)
+    push_init_body_pose = torch.from_numpy(np.load(self.cfg.push_ref_pose_path)).to(self.device).repeat(self.num_envs, 1 , 1)
+    steer_init_body_pose = torch.from_numpy(np.load(self.cfg.steer_ref_pose_path)).to(self.device).repeat(self.num_envs, 1 , 1)
     self.push_init_body_pos_b = push_init_body_pose[..., :3]
     self.steer_init_body_pos_b = steer_init_body_pose[..., :3]
     self.push_init_body_quat_b = push_init_body_pose[..., 3:]

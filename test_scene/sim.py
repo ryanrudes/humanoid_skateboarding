@@ -51,8 +51,17 @@ def load_onnx_policy(policy_path: str, device: str) -> OnnxPolicyWrapper:
     print(f"ONNX policy loaded from {policy_path} using providers: {session.get_providers()}")
     return OnnxPolicyWrapper(session, input_name)
 
-from pynput import keyboard
 import threading
+
+# Keyboard steering is optional: pynput needs an X display, so importing this
+# module (e.g. for rendering or tests) must not hard-fail on a headless box.
+try:
+    from pynput import keyboard
+    _HAS_KEYBOARD = True
+except Exception as _e:  # noqa: BLE001
+    keyboard = None
+    _HAS_KEYBOARD = False
+    print(f"[WARN] keyboard control unavailable ({_e}); running without interactive steering.")
 
 reset_flag = False 
 pause_flag = False
@@ -101,9 +110,10 @@ def start_listener():
     with keyboard.Listener(on_press=on_press) as listener:
         listener.join()
 
-listener_thread = threading.Thread(target=start_listener)
-listener_thread.daemon = True
-listener_thread.start()
+if _HAS_KEYBOARD:
+    listener_thread = threading.Thread(target=start_listener)
+    listener_thread.daemon = True
+    listener_thread.start()
 
 def get_gravity_orientation(quaternion):
     qw = quaternion[0]
@@ -135,14 +145,13 @@ def quat_apply_np(quat, vec):
     v_rot = v_rot.reshape(orig_shape)
     return v_rot
 
-reindex_list = [15, 16, 17, 18, 19, 20, 21, 22, 0, 2, 6, 8, 12, 1, 3, 7, 9, 13, 14, 4, 5, 10, 11]
-
 class RealTimePolicyController:
-    def __init__(self, 
-                 xml_file, 
-                 policy_path, 
-                 device='cuda', 
+    def __init__(self,
+                 xml_file,
+                 policy_path,
+                 device='cuda',
                  policy_frequency=50,
+                 robot='g1',
                  ):
 
         self.device = device
@@ -156,57 +165,91 @@ class RealTimePolicyController:
         self.model.opt.ccd_iterations = 50
         
         self.data = mujoco.MjData(self.model)
-        
+
+        # Derive all robot-specific layout (num_actions, the policy(joint)->ctrl
+        # (actuator) reindex, the per-joint action scale, and the init pose) from
+        # the scene model, so this same code drives any robot whose scene was
+        # exported by scripts/gen_scene_xml.py. This reproduces the G1 values
+        # exactly and additionally supports the AgiBot X2.
+        self._derive_layout()
+
         self.viewer = mjv.launch_passive(self.model, self.data, show_left_ui=False, show_right_ui=False)
         self.viewer.cam.distance = 4.0
         self.viewer.cam.azimuth = 210.0
         self.viewer.cam.elevation = -10.0
-        self.num_actions = 23
         self.sim_duration = 30.0
         self.sim_dt = 0.005
         self.cycle_time = 6
         self.step_dt = 1 / policy_frequency
         self.sim_decimation = int(1 / (policy_frequency * self.sim_dt))
-        
+
         print(f"sim_decimation: {self.sim_decimation}")
+        print(f"num_actions: {self.num_actions} (derived from scene)")
 
         self.last_action = np.zeros(self.num_actions, dtype=np.float32)
 
-        self.robot_default_dof_pos = np.array([
-            0.0, 0.0, 0.0, 0.23, -0.20, 0.0,
-            -0.7, 0.0, 0.0, 1.17, -0.45, 0.0,
-            0.0, 0.0, 0.0,
-            -0.03, 0.45, -0.21, 1.32,
-            -0.7, -0.845, 0.83, 1.19
-            ])
-
-        self.mujoco_default_dof_pos = np.concatenate([
-            np.array([-0.03, 0.1, 0.78]),
-            np.array([1, 0, 0, 0]),
-            self.robot_default_dof_pos,
-            np.array([0, 0, 0.10]),
-            np.array([1, 0, 0, 0]),
-            np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-        ])
-        
-        self.action_scale = np.array([
-            0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386, 
-            0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386, 
-            0.5475, 0.4386, 0.4386, 
-            0.4386, 0.4386, 0.4386, 0.4386,
-            0.4386, 0.4386, 0.4386, 0.4386,
-        ])
-
-        self.n_obs_single = 3 + 3 + 3 + 3*23 + 1
+        n = self.num_actions
+        self.n_obs_single = 3 + 3 + 3 + 3 * n + 1
         self.history_len = 5
-        self.total_obs_size = self.n_obs_single * (self.history_len) 
+        self.total_obs_size = self.n_obs_single * (self.history_len)
 
-        self.obs_block_dims = [2, 1, 3, 3, 23, 23, 23, 1]
+        self.obs_block_dims = [2, 1, 3, 3, n, n, n, 1]
         self.obs_block_starts = np.cumsum([0] + self.obs_block_dims[:-1])
 
         self.proprio_history_buf = deque(maxlen=self.history_len)
         for _ in range(self.history_len):
             self.proprio_history_buf.append(np.zeros(self.n_obs_single, dtype=np.float32))
+
+    def _derive_layout(self):
+        """Derive robot-specific arrays from the scene model (robot-agnostic).
+
+        The policy acts in *joint* order (mjlab JointPositionAction) while the
+        scene's ``ctrl`` is in *actuator* order, so we build:
+          - num_actions, the robot's hinge-joint count;
+          - reindex_list[k]: the joint-order index feeding robot ctrl slot k;
+          - robot_ctrl_indices[k]: the ctrl index of the k-th robot actuator;
+          - action_scale (joint order): 0.25 * effort_limit / stiffness;
+          - the init pose from the scene keyframe (mjlab bakes PUSH_INIT here).
+        Validated to reproduce the original hand-tuned G1 constants exactly.
+        """
+        m = self.model
+        hinge = mujoco.mjtJoint.mjJNT_HINGE
+
+        def jname(j):
+            return mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, j) or ""
+
+        # Robot hinge joints in qpos id order == the policy's joint order.
+        joint_order = [
+            j for j in range(m.njnt)
+            if m.jnt_type[j] == hinge and jname(j).startswith("robot/")
+        ]
+        jpos = {j: k for k, j in enumerate(joint_order)}
+        self.num_actions = len(joint_order)
+
+        robot_ctrl_indices, reindex = [], []
+        action_scale = np.zeros(self.num_actions, dtype=np.float32)
+        for i in range(m.nu):
+            jid = int(m.actuator_trnid[i, 0])
+            if not jname(jid).startswith("robot/"):
+                continue  # skateboard actuator (the ctrl tail)
+            k = jpos[jid]
+            robot_ctrl_indices.append(i)
+            reindex.append(k)
+            kp = m.actuator_gainprm[i, 0]
+            effort = m.actuator_forcerange[i, 1]
+            action_scale[k] = 0.25 * effort / kp if kp != 0 else 0.0
+        self.robot_ctrl_indices = np.array(robot_ctrl_indices, dtype=int)
+        self.reindex_list = np.array(reindex, dtype=int)
+        self.action_scale = action_scale
+
+        # Initial scene pose: mjlab exports PUSH_INIT as keyframe 0.
+        if m.nkey > 0:
+            self.mujoco_default_dof_pos = np.array(m.key_qpos[0], dtype=np.float64)
+        else:
+            self.mujoco_default_dof_pos = np.array(m.qpos0, dtype=np.float64)
+        self.robot_default_dof_pos = self.mujoco_default_dof_pos[
+            7:7 + self.num_actions
+        ].astype(np.float32)
 
     def reset_sim(self):
         """Reset simulation to initial state"""
@@ -217,7 +260,7 @@ class RealTimePolicyController:
         """Reset robot to initial position"""
         self.data.qpos[:] = init_pos
         self.data.qvel[:] = 0
-        self.data.ctrl[:-7] = self.robot_default_dof_pos[reindex_list]
+        self.data.ctrl[self.robot_ctrl_indices] = self.robot_default_dof_pos[self.reindex_list]
         mujoco.mj_forward(self.model, self.data)
 
     def extract_data(self):
@@ -312,7 +355,7 @@ class RealTimePolicyController:
                     if not self.viewer.is_running():
                         viewer_closed = True
                         break
-                    self.data.ctrl[:-7] = pd_target_robot[reindex_list]
+                    self.data.ctrl[self.robot_ctrl_indices] = pd_target_robot[self.reindex_list]
                     mujoco.mj_step(self.model, self.data)
                     pelvis_pos = self.data.xpos[self.model.body("robot/pelvis").id]
                     self.viewer.cam.lookat = pelvis_pos
