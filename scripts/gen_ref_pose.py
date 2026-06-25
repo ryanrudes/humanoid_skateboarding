@@ -230,11 +230,17 @@ def main() -> None:
     yaw = np.degrees(2.0 * np.arctan2(root_quat[3], root_quat[0]))
     print(f"wrote {path}  shape={ref.shape}  pelvis_yaw={yaw:.0f}deg "
           f"foot_ik_err(L,R)={np.round(ik_err, 4)}  min_body_z={ref[:, 2].min():.3f}")
+    joints = data.qpos[7:7 + (x2_model.nq - 7)]
     if "steer" in path:
       # The retargeted steer joint config — keep cfg.steer_init_pos in sync with it
       # (it is the joint target of the steer-phase steer_joint_pos reward).
-      joints = data.qpos[7:7 + (x2_model.nq - 7)]
       print("  steer_init_pos =", [round(float(v), 3) for v in joints])
+    if "push" in path:
+      # The on-board push pose — use it as the X2 spawn (PUSH_INIT_KEYFRAME) so the
+      # robot starts on the board instead of splayed beside it.
+      print("  PUSH spawn pos =", [round(float(v), 4) for v in root_pos])
+      print("  PUSH spawn rot =", [round(float(v), 4) for v in root_quat])
+      print("  PUSH joints =", [round(float(v), 3) for v in joints])
 
 
 if __name__ == "__main__":

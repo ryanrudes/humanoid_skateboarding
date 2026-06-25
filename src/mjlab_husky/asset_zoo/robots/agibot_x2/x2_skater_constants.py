@@ -158,26 +158,26 @@ X2_ARTICULATION = EntityArticulationInfoCfg(
 # Keyframe config.
 ##
 
-# Push stance adapted from the G1 ``PUSH_INIT_KEYFRAME`` to X2 joint names and
-# ranges. NOTE: the X2 elbow range is [-2.3556, 0] (opposite sign to the G1), so
-# elbow targets are negative here. These values are a sensible starting stance
-# and are expected to need visual tuning for good skateboarding behaviour.
+# Spawn pose = the retargeted on-board push stance (mounted foot centered on the
+# deck, pushing foot planted on the ground, torso leaning into the push). Pose +
+# root world transform are produced by scripts/gen_ref_pose.py and match
+# dataset/ref_pose/x2_push_start_pose_b.npy; keep them in sync. (The earlier
+# hand-adapted G1 values put the X2's feet off the board.)
 PUSH_INIT_KEYFRAME = EntityCfg.InitialStateCfg(
-  pos=(-0.03, 0.1, 0.70),
+  pos=(-0.1667, 0.1467, 0.6682),
+  rot=(0.9913, -0.025, 0.013, 0.1286),  # ~15 deg yaw, wxyz
   joint_pos={
-    "left_knee_joint": 0.23,
-    "left_ankle_pitch_joint": -0.20,
-    "right_hip_pitch_joint": -0.7,
-    "right_knee_joint": 1.17,
-    "right_ankle_pitch_joint": -0.45,
-    "left_shoulder_pitch_joint": -0.03,
-    "left_shoulder_roll_joint": 0.45,
-    "left_shoulder_yaw_joint": -0.21,
-    "left_elbow_joint": -1.32,
-    "right_shoulder_pitch_joint": -0.7,
-    "right_shoulder_roll_joint": -0.845,
-    "right_shoulder_yaw_joint": 0.83,
-    "right_elbow_joint": -1.19,
+    "left_hip_pitch_joint": -0.245, "left_hip_roll_joint": 0.032,
+    "left_hip_yaw_joint": -0.096, "left_knee_joint": 0.0,
+    "left_ankle_pitch_joint": 0.174, "left_ankle_roll_joint": -0.123,
+    "right_hip_pitch_joint": -0.862, "right_hip_roll_joint": -0.238,
+    "right_hip_yaw_joint": -0.283, "right_knee_joint": 0.966,
+    "right_ankle_pitch_joint": -0.121, "right_ankle_roll_joint": -0.17,
+    "waist_yaw_joint": -0.308, "waist_pitch_joint": 0.247, "waist_roll_joint": -0.047,
+    "left_shoulder_pitch_joint": -0.03, "left_shoulder_roll_joint": 0.45,
+    "left_shoulder_yaw_joint": -0.21, "left_elbow_joint": -1.32,
+    "right_shoulder_pitch_joint": -0.7, "right_shoulder_roll_joint": -0.845,
+    "right_shoulder_yaw_joint": 0.83, "right_elbow_joint": -1.19,
   },
   joint_vel={".*": 0.0},
 )

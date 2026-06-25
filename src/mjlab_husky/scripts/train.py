@@ -38,6 +38,9 @@ class TrainConfig:
   shown in the logs). The first clip starts at iteration 0."""
   video_seconds: float = 6.0
   """Length of each clip, in seconds of footage (at the control rate)."""
+  video_height: int = 720
+  video_width: int = 1280
+  """Resolution of the recorded clips (the renderer default is a tiny 240x320)."""
   enable_nan_guard: bool = False
   torchrunx_log_dir: str | None = None
   wandb_run_path: str | None = None
@@ -93,6 +96,11 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
 
   if rank == 0:
     print(f"[INFO] Logging experiment in directory: {log_dir}")
+
+  if cfg.video:
+    # Bump the offscreen render resolution above the tiny ViewerConfig default.
+    cfg.env.viewer.height = cfg.video_height
+    cfg.env.viewer.width = cfg.video_width
 
   env = G1SkaterManagerBasedRlEnv(
     cfg=cfg.env, device=device, render_mode="rgb_array" if cfg.video else None
