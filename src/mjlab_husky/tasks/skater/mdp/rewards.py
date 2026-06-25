@@ -140,14 +140,9 @@ def steer_tilt_guide(env: G1SkaterManagerBasedRlEnv, command_name: str, std: flo
 #### transition rewards ####
 def transition_body_pos_tracking(env: G1SkaterManagerBasedRlEnv, std: float) -> torch.Tensor:
   target_pos_b, _, in_transition = env._get_transition_target_b()
-  
-  body_pos_w = env.robot.data.body_link_pos_w[:, :, :3]
-  root_pos_w = env.skateboard.data.root_link_pos_w[:, :3][:, None, :].repeat(1, env.robot.num_bodies, 1)
-  root_quat_w = env.skateboard.data.root_link_quat_w[:, None, :].repeat(1, env.robot.num_bodies, 1)
-  
-  rel_pos_w = body_pos_w - root_pos_w
-  current_body_pos_b = quat_apply_inverse(root_quat_w, rel_pos_w)
-  
+
+  current_body_pos_b, _ = env._bodies_in_board_frame()
+
   pos_error = (current_body_pos_b - target_pos_b)[:, env.beizer_ids, :]
   pos_error_norm = torch.sum(torch.square(pos_error),dim=-1)
   reward = torch.exp(- pos_error_norm.mean(dim=-1) / std**2)
@@ -156,12 +151,14 @@ def transition_body_pos_tracking(env: G1SkaterManagerBasedRlEnv, std: float) -> 
 
 def transition_body_rot_tracking(env: G1SkaterManagerBasedRlEnv, std: float) -> torch.Tensor:
   _, target_quat_b, in_transition = env._get_transition_target_b()
-  
-  body_quat_w = env.robot.data.body_link_quat_w[:, :, :4]
-  root_quat_w = env.skateboard.data.root_link_quat_w[:, None, :].repeat(1, env.robot.num_bodies, 1)
-  target_quat_w = quat_mul(root_quat_w, target_quat_b)
 
-  quat_error = torch.square(quat_error_magnitude(target_quat_w[:, env.slerp_ids, :],body_quat_w[:, env.slerp_ids, :]))
+  # The rotation-error magnitude is invariant to a common rotation, so we
+  # evaluate it directly in the (cached) skateboard frame: this matches
+  # error(root*target_b, root*body_b) == error(target_b, body_b) while reusing
+  # `_bodies_in_board_frame` and dropping the per-body root-quat repeat + quat_mul.
+  _, current_body_quat_b = env._bodies_in_board_frame()
+
+  quat_error = torch.square(quat_error_magnitude(target_quat_b[:, env.slerp_ids, :], current_body_quat_b[:, env.slerp_ids, :]))
   reward = torch.exp(- quat_error.mean(dim=-1) / std**2)
   reward = torch.where(in_transition, reward, torch.zeros_like(reward))
   return reward

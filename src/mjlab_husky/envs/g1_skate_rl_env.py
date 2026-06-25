@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 import mujoco
 import numpy as np
@@ -122,6 +123,24 @@ class G1SkaterManagerBasedRlEnv(ManagerBasedRlEnv):
   
   def _init_buffers(self):
     self._init_ids_buffers()
+
+    # Per-step memoization for the phase and transition-target computations.
+    # Both are pure functions of the current sim state, yet each is invoked
+    # several times per env step (phase ~7x, transition target 4x) by the
+    # observation and reward terms. We recompute them only when the underlying
+    # state changes -- once after the physics substeps and again after a reset
+    # -- by bumping a token (see `_invalidate_step_cache`). Set
+    # HUSKY_DISABLE_STEP_CACHE=1 to fall back to recompute-every-call (used to
+    # verify numerical equivalence).
+    self._use_step_cache = os.environ.get("HUSKY_DISABLE_STEP_CACHE", "0") != "1"
+    self._step_cache_token = 0
+    self._phase_cache: torch.Tensor | None = None
+    self._phase_cache_token = -1
+    self._transition_cache: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None
+    self._transition_cache_token = -1
+    self._body_frame_cache: tuple[torch.Tensor, torch.Tensor] | None = None
+    self._body_frame_cache_token = -1
+
     self.phase_ratios = torch.tensor(self.cfg.phase_ratios, device=self.device).repeat(self.num_envs, 1)
     self.steer_init_pos = torch.tensor(self.cfg.steer_init_pos, device=self.device).repeat(self.num_envs, 1)
     self.last_contacts = torch.zeros(self.num_envs, 2, dtype=torch.bool, device=self.device, requires_grad=False)
@@ -200,6 +219,9 @@ class G1SkaterManagerBasedRlEnv(ManagerBasedRlEnv):
     self.episode_length_buf += 1
     self.phase_length_buf += 1
     self.common_step_counter += 1
+    # Physics substeps advanced the state; invalidate the per-step cache so the
+    # phase / transition targets are recomputed once for this step.
+    self._invalidate_step_cache()
     self._compute_contact()
 
     # Check terminations.
@@ -265,7 +287,14 @@ class G1SkaterManagerBasedRlEnv(ManagerBasedRlEnv):
     self.phase_length_buf[env_ids] = 0
     for buf in self.body_bezier_buffers.values():
         buf[env_ids] = 0
-  
+    # Reset changed the state (phase counters, body poses after the subsequent
+    # sim.forward()); invalidate so cached phase / transition targets are
+    # recomputed for the post-reset observation.
+    self._invalidate_step_cache()
+
+  def _invalidate_step_cache(self) -> None:
+    self._step_cache_token += 1
+
   def _compute_contact(self):
     self.skateboard_contact_sensor = self.scene.sensors["skateboard_collision"]
     self.left_feet_contact_ground = self.scene.sensors["left_feet_ground_contact"]
@@ -301,11 +330,7 @@ class G1SkaterManagerBasedRlEnv(ManagerBasedRlEnv):
     self.just_exited_push2steer = (self.last_contact_phase[:, 2] > 0.5) & ~push2steer
     self.just_exited_steer2push = (self.last_contact_phase[:, 3] > 0.5) & ~steer2push
     
-    body_pos_w = self.robot.data.body_link_pos_w
-    body_quat_w = self.robot.data.body_link_quat_w
-    root_pos_w = self.skateboard.data.root_link_pos_w[:, None, :].repeat(1, self.robot.num_bodies, 1)
-    root_quat_w = self.skateboard.data.root_link_quat_w[:, None, :].repeat(1, self.robot.num_bodies, 1)
-    body_pos_b, body_quat_b = subtract_frame_transforms(root_pos_w, root_quat_w, body_pos_w, body_quat_w)
+    body_pos_b, body_quat_b = self._bodies_in_board_frame()
     if self.just_entered_push2steer.any():
         self.body_bezier_buffers["push2steer_start_pos_b"][self.just_entered_push2steer] = body_pos_b[self.just_entered_push2steer]
         self.body_bezier_buffers["push2steer_start_quat_b"][self.just_entered_push2steer] = body_quat_b[self.just_entered_push2steer]
@@ -315,12 +340,16 @@ class G1SkaterManagerBasedRlEnv(ManagerBasedRlEnv):
         self.body_bezier_buffers["steer2push_start_quat_b"][self.just_entered_steer2push] = body_quat_b[self.just_entered_steer2push]
     
   def _get_phase(self):
-    self.phase_length_buf[self.still] = torch.where((self.phase_length_buf[self.still]-1) % int(self.cycle_time/ 2 / self.step_dt) == 0, 
-                                                            0, 
+    if self._use_step_cache and self._phase_cache_token == self._step_cache_token:
+      return self._phase_cache
+    self.phase_length_buf[self.still] = torch.where((self.phase_length_buf[self.still]-1) % int(self.cycle_time/ 2 / self.step_dt) == 0,
+                                                            0,
                                                             self.phase_length_buf[self.still])
     phase = ((self.phase_length_buf * self.step_dt / self.cycle_time)) % 1.0
     phase = torch.clip(phase, 0.0, 1.0)
 
+    self._phase_cache = phase
+    self._phase_cache_token = self._step_cache_token
     return phase
   
   def _steer_remaining_steps(self):
@@ -362,18 +391,34 @@ class G1SkaterManagerBasedRlEnv(ManagerBasedRlEnv):
     dis = marker_pos - feet_pos
     return dis
   
+  def _bodies_in_board_frame(self):
+    """Robot body poses (all bodies) expressed in the skateboard root frame.
+
+    Computed once per step (memoized via the step-cache token) and shared by the
+    contact-phase bezier capture, the transition-target computation, and the
+    transition position-tracking reward -- each of which previously recomputed
+    this same (num_envs, num_bodies) frame transform from scratch.
+    """
+    if self._use_step_cache and self._body_frame_cache_token == self._step_cache_token:
+      return self._body_frame_cache
+    body_pos_w = self.robot.data.body_link_pos_w
+    body_quat_w = self.robot.data.body_link_quat_w
+    root_pos_w = self.skateboard.data.root_link_pos_w[:, None, :].repeat(1, self.robot.num_bodies, 1)
+    root_quat_w = self.skateboard.data.root_link_quat_w[:, None, :].repeat(1, self.robot.num_bodies, 1)
+    pos_b, quat_b = subtract_frame_transforms(root_pos_w, root_quat_w, body_pos_w, body_quat_w)
+    self._body_frame_cache = (pos_b, quat_b)
+    self._body_frame_cache_token = self._step_cache_token
+    return self._body_frame_cache
+
   def _get_transition_target_b(self):
+    if self._use_step_cache and self._transition_cache_token == self._step_cache_token:
+      return self._transition_cache
     phase = self._get_phase()
     push2steer = (phase > self.phase_ratios[:, 1]) & (phase < self.phase_ratios[:, 2]) & ~self.still
     steer2push = (phase > self.phase_ratios[:, 3]) & (phase < self.phase_ratios[:, 4]) & ~self.still
     in_transition = push2steer | steer2push
     
-    body_pos_w = self.robot.data.body_link_pos_w
-    body_quat_w = self.robot.data.body_link_quat_w
-    skate_pos_w = self.skateboard.data.root_link_pos_w[:, None, :].repeat(1, self.robot.num_bodies, 1)
-    skate_quat_w = self.skateboard.data.root_link_quat_w[:, None, :].repeat(1, self.robot.num_bodies, 1)
-    
-    current_body_pos_b,current_body_quat_b = subtract_frame_transforms(skate_pos_w, skate_quat_w, body_pos_w, body_quat_w)
+    current_body_pos_b, current_body_quat_b = self._bodies_in_board_frame()
     target_pos_b = current_body_pos_b.clone()
     target_quat_b = current_body_quat_b.clone()
     if in_transition.any():
@@ -405,6 +450,8 @@ class G1SkaterManagerBasedRlEnv(ManagerBasedRlEnv):
             target_pos_b[steer2push] =  bezier_curve(start_pos_b, end_pos_b, t[steer2push],offset=0.2)
             target_quat_b[steer2push] = quaternion_slerp(start_quat_b, end_quat_b, t[steer2push])
 
+    self._transition_cache = (target_pos_b, target_quat_b, in_transition)
+    self._transition_cache_token = self._step_cache_token
     return target_pos_b, target_quat_b, in_transition
 
   def get_amp_observations(self):
