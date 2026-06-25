@@ -33,8 +33,11 @@ class TrainConfig:
   agent: RslRlAMPOnPolicyRunnerCfg
   registry_name: str | None = None
   video: bool = False
-  video_length: int = 200
-  video_interval: int = 2000
+  video_every_iters: int = 500
+  """Record a video clip every N training iterations (the "Learning iteration N"
+  shown in the logs). The first clip starts at iteration 0."""
+  video_seconds: float = 6.0
+  """Length of each clip, in seconds of footage (at the control rate)."""
   enable_nan_guard: bool = False
   torchrunx_log_dir: str | None = None
   wandb_run_path: str | None = None
@@ -120,14 +123,25 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
 
   # Only record videos on rank 0 to avoid multiple workers writing to the same files.
   if cfg.video and rank == 0:
+    # The recorder counts raw env steps and one frame == one env step. Convert the
+    # user-facing iterations/seconds into those units: the rollout takes
+    # num_steps_per_env env-steps per training iteration, and the control rate is
+    # 1/step_dt Hz. (env is still the raw env here, so it exposes step_dt.)
+    fps = round(1.0 / env.step_dt)
+    interval_steps = max(1, cfg.video_every_iters * cfg.agent.num_steps_per_env)
+    length_frames = max(1, round(cfg.video_seconds * fps))
+    video_dir = Path(log_dir) / "videos" / "train"
     env = VideoRecorder(
       env,
-      video_folder=Path(log_dir) / "videos" / "train",
-      step_trigger=lambda step: step % cfg.video_interval == 0,
-      video_length=cfg.video_length,
+      video_folder=video_dir,
+      step_trigger=lambda step: step % interval_steps == 0,
+      video_length=length_frames,
       disable_logger=True,
     )
-    print("[INFO] Recording videos during training.")
+    print(
+      f"[INFO] Recording a {cfg.video_seconds:g}s clip every "
+      f"{cfg.video_every_iters} training iterations -> {video_dir}"
+    )
 
   env = RslRlVecEnvWrapper(env, clip_actions=cfg.agent.clip_actions)
 
