@@ -8,8 +8,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
 
-import tyro
-from mjlab.envs import ManagerBasedRlEnvCfg, ManagerBasedRlEnv
+# MuJoCo selects its GL backend on first import; force headless EGL *before* the
+# mjlab/mujoco imports below so `--video`'s offscreen renderer has a valid
+# context (launch_training sets this too late). Respects an explicit MUJOCO_GL.
+os.environ.setdefault("MUJOCO_GL", "egl")
+
+import tyro  # noqa: E402
+from mjlab.envs import ManagerBasedRlEnvCfg, ManagerBasedRlEnv  # noqa: E402
 from mjlab_husky.envs import G1SkaterManagerBasedRlEnvCfg, G1SkaterManagerBasedRlEnv
 from mjlab_husky.rl import RslRlVecEnvWrapper
 from mjlab_husky.rl import RslRlAMPOnPolicyRunnerCfg
