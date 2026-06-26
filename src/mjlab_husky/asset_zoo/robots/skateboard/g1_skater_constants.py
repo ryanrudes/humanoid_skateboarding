@@ -41,7 +41,15 @@ def get_g1_spec() -> mujoco.MjSpec:
 
 def get_skateboard_spec() -> mujoco.MjSpec:
   spec = mujoco.MjSpec.from_file(str(SKATEBOARD_XML))
-  spec.assets = get_assets(spec.meshdir)
+  # The skateboard is built from primitive geoms and references no meshes, but the
+  # shared asset dir (G1_XML.parent / "assets") also holds the G1's link meshes.
+  # Loading all of them makes the skateboard entity carry ~60 foreign meshes that,
+  # when mjlab composes a scene with a *non-G1* robot, override that robot's
+  # same-named link meshes by filename (e.g. the X2 foot rendered + collided as a
+  # G1 foot). Keep only the assets the skateboard actually references.
+  all_assets = get_assets(spec.meshdir)
+  used = {os.path.basename(m.file) for m in spec.meshes if m.file}
+  spec.assets = {k: v for k, v in all_assets.items() if os.path.basename(k) in used}
   return spec
 
 ##
