@@ -97,13 +97,17 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
   if rank == 0:
     print(f"[INFO] Logging experiment in directory: {log_dir}")
 
-  if cfg.video:
+  # Only rank 0 records video, so only rank 0 builds the offscreen GL renderer.
+  # Constructing it on the other workers (which never record) segfaults under
+  # multi-GPU torchrunx, which then stalls rank 0 at the gradient all-reduce.
+  record_video = cfg.video and rank == 0
+  if record_video:
     # Bump the offscreen render resolution above the tiny ViewerConfig default.
     cfg.env.viewer.height = cfg.video_height
     cfg.env.viewer.width = cfg.video_width
 
   env = G1SkaterManagerBasedRlEnv(
-    cfg=cfg.env, device=device, render_mode="rgb_array" if cfg.video else None
+    cfg=cfg.env, device=device, render_mode="rgb_array" if record_video else None
   )
 
   log_root_path = log_dir.parent  # Go up from specific run dir to experiment dir.
@@ -130,7 +134,7 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
       )
 
   # Only record videos on rank 0 to avoid multiple workers writing to the same files.
-  if cfg.video and rank == 0:
+  if record_video:
     # The recorder counts raw env steps and one frame == one env step. Convert the
     # user-facing iterations/seconds into those units: the rollout takes
     # num_steps_per_env env-steps per training iteration, and the control rate is
