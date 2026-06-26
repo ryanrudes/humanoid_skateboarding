@@ -100,13 +100,30 @@ def load_onnx_policy(policy_path: str, device: str) -> OnnxPolicyWrapper:
     return OnnxPolicyWrapper(session, input_name)
 
 
-def build_robot_only_model(xml_file: str) -> mujoco.MjModel:
-    """Compile ``xml_file`` with the skateboard removed, leaving just the G1.
+def build_robot_only_model(xml_file: str) -> tuple[mujoco.MjModel, np.ndarray]:
+    """Compile ``xml_file`` with the skateboard removed, leaving just the robot.
 
     The robot keeps its original joint/actuator/sensor ordering, so the rest of
     this script can reuse the exact observation/action layout from ``sim.py``.
+    Works for any robot whose board-containing scene was exported by
+    ``scripts/gen_scene_xml.py`` (G1, AgiBot X2, ...).
+
+    Returns the board-free model plus the robot's reference (PUSH_INIT) joint pose
+    read from the scene keyframe *before* it is dropped (removing the board changes
+    ``nq``, so the keyframe can't be kept).
     """
     spec = mujoco.MjSpec.from_file(xml_file)
+
+    # Read the robot's default dof pose from the scene keyframe before removing it.
+    full = spec.compile()
+    hinge = mujoco.mjtJoint.mjJNT_HINGE
+    n_robot = sum(
+        1 for j in range(full.njnt)
+        if full.jnt_type[j] == hinge
+        and (mujoco.mj_id2name(full, mujoco.mjtObj.mjOBJ_JOINT, j) or "").startswith("robot/")
+    )
+    key0 = full.key_qpos[0] if full.nkey > 0 else full.qpos0
+    robot_default_dof = np.array(key0[7:7 + n_robot], dtype=np.float32)
 
     # Keyframes encode the full (robot + board) qpos/ctrl; drop them since the
     # dimensions change once the board is gone (we initialize in Python anyway).
@@ -126,7 +143,7 @@ def build_robot_only_model(xml_file: str) -> mujoco.MjModel:
     if board is not None:
         spec.delete(board)
 
-    return spec.compile()
+    return spec.compile(), robot_default_dof
 
 
 # ---------------------------------------------------------------------------
@@ -229,19 +246,10 @@ def quat_apply_np(quat, vec):
     return v_rot
 
 
-# Maps policy-ordered joint vectors into the MuJoCo actuator/ctrl order.
-reindex_list = [15, 16, 17, 18, 19, 20, 21, 22, 0, 2, 6, 8, 12, 1, 3, 7, 9, 13, 14, 4, 5, 10, 11]
-
-# Policy reference pose (the "skating stance"; zero action maps to this). Same
-# as sim.py's robot_default_dof_pos. Observations are computed relative to it,
-# so it stays fixed regardless of how the robot is initialized.
-ROBOT_DEFAULT_DOF_POS = np.array([
-    0.0, 0.0, 0.0, 0.23, -0.20, 0.0,
-    -0.7, 0.0, 0.0, 1.17, -0.45, 0.0,
-    0.0, 0.0, 0.0,
-    -0.03, 0.45, -0.21, 1.32,
-    -0.7, -0.845, 0.83, 1.19,
-], dtype=np.float32)
+# The joint<->ctrl reindex, the per-joint action_scale, and the reference
+# (PUSH_INIT) pose are derived from the scene model at runtime
+# (RealTimePolicyController._derive_layout), so this script is robot-agnostic
+# (G1 23-dof, AgiBot X2 31-dof, ...) — mirroring test_scene/sim.py.
 
 # A symmetric two-foot standing pose (policy joint order: left leg, right leg,
 # waist yaw/roll/pitch, left arm, right arm). Slight knee bend for stability.
@@ -270,8 +278,9 @@ class RealTimePolicyController:
         self.device = device
         self.policy = load_onnx_policy(policy_path, device)
 
-        # Build a board-free model from the same scene used by sim.py.
-        self.model = build_robot_only_model(xml_file)
+        # Build a board-free model from the same scene used by sim.py, and capture
+        # the robot's reference (PUSH_INIT) pose from the scene keyframe.
+        self.model, self.robot_default_dof_pos = build_robot_only_model(xml_file)
         self.model.opt.timestep = 0.005
         self.model.opt.iterations = 10
         self.model.opt.ls_iterations = 20
@@ -280,38 +289,41 @@ class RealTimePolicyController:
         self.data = mujoco.MjData(self.model)
         self.viewer = None  # created lazily by run() (interactive mode only).
 
-        self.num_actions = 23
         self.sim_dt = 0.005
         self.cycle_time = 6
         self.step_dt = 1 / policy_frequency
         self.sim_decimation = int(1 / (policy_frequency * self.sim_dt))
         self.settle_steps = int(round(settle_time / self.sim_dt))
 
-        print(f"sim_decimation: {self.sim_decimation}")
+        # Robot-agnostic layout (num_actions, joint<->ctrl reindex, action_scale)
+        # derived from the board-free model — same scheme as test_scene/sim.py.
+        self._derive_layout()
+        print(f"sim_decimation: {self.sim_decimation}  num_actions: {self.num_actions} (derived)")
 
-        self.robot_default_dof_pos = ROBOT_DEFAULT_DOF_POS.copy()
-        if init_pose == 'stand':
-            self.robot_init_dof_pos = ROBOT_STAND_DOF_POS.copy()
-        elif init_pose == 'default':
-            self.robot_init_dof_pos = ROBOT_DEFAULT_DOF_POS.copy()
+        # init_pose: 'default' = the policy's reference stance (PUSH_INIT, derived);
+        # 'stand' = a symmetric two-foot stance (G1-only hardcode; falls back to
+        # 'default' for any robot whose dof count differs).
+        if init_pose == 'default':
+            self.robot_init_dof_pos = self.robot_default_dof_pos.copy()
+        elif init_pose == 'stand':
+            if self.num_actions == ROBOT_STAND_DOF_POS.shape[0]:
+                self.robot_init_dof_pos = ROBOT_STAND_DOF_POS.copy()
+            else:
+                print(f"[WARN] init_pose='stand' is only defined for the "
+                      f"{ROBOT_STAND_DOF_POS.shape[0]}-dof G1; using 'default' for this "
+                      f"{self.num_actions}-dof robot.")
+                self.robot_init_dof_pos = self.robot_default_dof_pos.copy()
         else:
             raise ValueError(f"Unknown init_pose: {init_pose!r} (expected 'stand' or 'default')")
 
         self.last_action = np.zeros(self.num_actions, dtype=np.float32)
 
-        self.action_scale = np.array([
-            0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386,
-            0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386,
-            0.5475, 0.4386, 0.4386,
-            0.4386, 0.4386, 0.4386, 0.4386,
-            0.4386, 0.4386, 0.4386, 0.4386,
-        ])
-
-        self.n_obs_single = 3 + 3 + 3 + 3 * 23 + 1
+        n = self.num_actions
+        self.n_obs_single = 3 + 3 + 3 + 3 * n + 1
         self.history_len = 5
-        self.total_obs_size = self.n_obs_single * (self.history_len)
+        self.total_obs_size = self.n_obs_single * self.history_len
 
-        self.obs_block_dims = [2, 1, 3, 3, 23, 23, 23, 1]
+        self.obs_block_dims = [2, 1, 3, 3, n, n, n, 1]
         self.obs_block_starts = np.cumsum([0] + self.obs_block_dims[:-1])
 
         self.proprio_history_buf = deque(maxlen=self.history_len)
@@ -329,8 +341,45 @@ class RealTimePolicyController:
         # qpos so every reset restores an identical, stable standing state.
         self.init_qpos = self._compute_init_qpos()
 
+    def _derive_layout(self):
+        """Derive num_actions, the policy(joint)->ctrl(actuator) reindex, the robot
+        ctrl indices, and the per-joint action scale from the board-free model.
+
+        Mirrors test_scene/sim.py::_derive_layout; the board is already removed
+        here, so every actuator is the robot's. Validated to reproduce the G1 and
+        to support the AgiBot X2.
+        """
+        m = self.model
+        hinge = mujoco.mjtJoint.mjJNT_HINGE
+
+        def jname(j):
+            return mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, j) or ""
+
+        joint_order = [
+            j for j in range(m.njnt)
+            if m.jnt_type[j] == hinge and jname(j).startswith("robot/")
+        ]
+        jpos = {j: k for k, j in enumerate(joint_order)}
+        self.num_actions = len(joint_order)
+
+        robot_ctrl_indices, reindex = [], []
+        action_scale = np.zeros(self.num_actions, dtype=np.float32)
+        for i in range(m.nu):
+            jid = int(m.actuator_trnid[i, 0])
+            if not jname(jid).startswith("robot/"):
+                continue
+            k = jpos[jid]
+            robot_ctrl_indices.append(i)
+            reindex.append(k)
+            kp = m.actuator_gainprm[i, 0]
+            effort = m.actuator_forcerange[i, 1]
+            action_scale[k] = 0.25 * effort / kp if kp != 0 else 0.0
+        self.robot_ctrl_indices = np.array(robot_ctrl_indices, dtype=int)
+        self.reindex_list = np.array(reindex, dtype=int)
+        self.action_scale = action_scale
+
     def _make_qpos(self, root_z: float) -> np.ndarray:
-        """Robot-only qpos: root pos (3) + root quat (4) + 23 dof (policy order)."""
+        """Robot-only qpos: root pos (3) + root quat (4) + N dof (policy order)."""
         return np.concatenate([
             np.array([0.0, 0.0, root_z], dtype=np.float32),
             np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
@@ -364,7 +413,7 @@ class RealTimePolicyController:
         self.data.qvel[:] = 0.0
 
         # Hold the init pose with the position servos while it settles.
-        self.data.ctrl[:] = self.robot_init_dof_pos[reindex_list]
+        self.data.ctrl[self.robot_ctrl_indices] = self.robot_init_dof_pos[self.reindex_list]
         mujoco.mj_forward(self.model, self.data)
         for _ in range(self.settle_steps):
             mujoco.mj_step(self.model, self.data)
@@ -382,7 +431,7 @@ class RealTimePolicyController:
         """Reset robot to the cached standing pose."""
         self.data.qpos[:] = self.init_qpos
         self.data.qvel[:] = 0.0
-        self.data.ctrl[:] = self.robot_init_dof_pos[reindex_list]
+        self.data.ctrl[self.robot_ctrl_indices] = self.robot_init_dof_pos[self.reindex_list]
         self.last_action = np.zeros(self.num_actions, dtype=np.float32)
         self.proprio_history_buf.clear()
         for _ in range(self.history_len):
@@ -436,7 +485,9 @@ class RealTimePolicyController:
             raw_action = self.policy(obs_tensor).cpu().numpy().squeeze()
         self.last_action = raw_action
         pd_target_robot = raw_action * self.action_scale + self.robot_default_dof_pos
-        return pd_target_robot[reindex_list]
+        ctrl = self.data.ctrl.copy()
+        ctrl[self.robot_ctrl_indices] = pd_target_robot[self.reindex_list]
+        return ctrl
 
     def run(self, sim_duration: float = 30.0):
         """Interactive playback in a MuJoCo passive viewer (requires a display)."""
