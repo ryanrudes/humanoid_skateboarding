@@ -1,0 +1,3 @@
+[submodule "deploy/agibot_x2_ultra_deploy"]
+	path = deploy/agibot_x2_ultra_deploy
+	url = https://github.com/fxxie2/agibot_x2_ultra_deploy

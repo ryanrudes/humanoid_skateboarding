@@ -1,0 +1,157 @@
+# Runtime config for the HUSKY skater policy on AgiBot X2 Ultra.
+# Modeled on agibot_x2_ultra_deploy/config/x2_ultra.yaml (same X2 SDK joint limits
+# and HAL topics); the skater-specific bits are command_provider.kind, the steer
+# teleop mapping, and heading_reference. Pass with:
+#   ros2 launch agibot_deploy_ros deploy.launch.py config_path:=<this> model_path:=<skater.onnx>
+# using the husky_x2_deploy.skate_deploy_node entry point.
+model:
+  path: ""
+control:
+  rate_hz: 50.0               # MUST equal the policy control_dt (0.02 s); the phase clock advances once per tick
+  soft_start_secs: 5.0        # ramp from the caught pose to default_joint_pos (PUSH_INIT) over this window; tune on the gantry
+  policy_fade_secs: 1.0       # blend the policy in over this window after soft-start
+  stand_only: false           # set true to only hold the caught/default pose (verify gains first), false to run the policy
+  require_start_trigger: true # arm; publish nothing until /agibot_deploy/start (no uncommanded gap vs `aima em stop-app mc`)
+  estop_damping_scale: 1.0
+  # Skater obs `heading`: hardware has no absolute world yaw. "start" yaw-normalizes
+  # to the heading captured at policy start (heading(0)=0; open-loop, IMU yaw drifts —
+  # the safe default). "absolute" uses raw IMU yaw (only if a real heading source exists).
+  heading_reference: start
+  teleop_enabled: true        # gamepad start / deadman command / E-stop (degrades to no-op without a pad)
+  teleop:
+    joystick: /dev/input/js0
+    max_x: 1.5                 # forward push-speed command upper bound (m/s) = skater v_max
+    max_y: 0.0                 # skater has no lateral command
+    max_yaw: 1.0               # steer is normalized [-1,1] -> heading target = wz * h_max (pi/4)
+    step_x: 0.1
+    step_y: 0.0
+    step_yaw: 0.1
+    estop_on_disconnect: true
+    deadman_button: 4                       # L1 (hold to send the command)
+    buttons:
+      start: {button: 9, modifiers: []}     # Options
+      estop: {button: 8, modifiers: [5, 1]} # Share + R1 + Circle
+    axes:
+      vx: {axis: 1, scale: -1.0}            # left stick Y (push up = forward speed)
+      vy: {axis: 0, scale: 1.0}             # unused by the skater
+      wz: {axis: 3, scale: -1.0}            # right stick X (left = +heading)
+  # Pre-policy stand pose: EMPTY => hold the model default (PUSH_INIT push stance on the
+  # board). The skater starts on the skateboard, so the free-standing CoM trim below is 0.
+  stand_pose: {}
+  stand_lean: 0.0             # CoM ankle trim is for free-standing balance; N/A on the board. Tune only if standing off-board first.
+  # Absolute stand Kp/Kd used during soft-start / stand_only (X2 values from x2_ultra.yaml).
+  stand_stiffness:
+    left_hip_pitch_joint: 80.0
+    left_hip_roll_joint: 60.0
+    left_hip_yaw_joint: 45.0
+    left_knee_joint: 120.0
+    left_ankle_pitch_joint: 80.0
+    left_ankle_roll_joint: 40.0
+    right_hip_pitch_joint: 80.0
+    right_hip_roll_joint: 60.0
+    right_hip_yaw_joint: 45.0
+    right_knee_joint: 120.0
+    right_ankle_pitch_joint: 80.0
+    right_ankle_roll_joint: 40.0
+    waist_yaw_joint: 30.0
+    waist_pitch_joint: 30.0
+    waist_roll_joint: 30.0
+    left_shoulder_pitch_joint: 15.0
+    left_shoulder_roll_joint: 15.0
+    left_shoulder_yaw_joint: 15.0
+    left_elbow_joint: 15.0
+    left_wrist_yaw_joint: 15.0
+    left_wrist_pitch_joint: 15.0
+    left_wrist_roll_joint: 15.0
+    right_shoulder_pitch_joint: 15.0
+    right_shoulder_roll_joint: 15.0
+    right_shoulder_yaw_joint: 15.0
+    right_elbow_joint: 15.0
+    right_wrist_yaw_joint: 15.0
+    right_wrist_pitch_joint: 15.0
+    right_wrist_roll_joint: 15.0
+    head_yaw_joint: 30.0
+    head_pitch_joint: 30.0
+  stand_damping:
+    left_hip_pitch_joint: 6.0
+    left_hip_roll_joint: 6.0
+    left_hip_yaw_joint: 4.5
+    left_knee_joint: 12.0
+    left_ankle_pitch_joint: 6.0
+    left_ankle_roll_joint: 3.0
+    right_hip_pitch_joint: 6.0
+    right_hip_roll_joint: 6.0
+    right_hip_yaw_joint: 4.5
+    right_knee_joint: 12.0
+    right_ankle_pitch_joint: 6.0
+    right_ankle_roll_joint: 3.0
+    waist_yaw_joint: 6.0
+    waist_pitch_joint: 6.0
+    waist_roll_joint: 6.0
+    left_shoulder_pitch_joint: 3.0
+    left_shoulder_roll_joint: 3.0
+    left_shoulder_yaw_joint: 3.0
+    left_elbow_joint: 3.0
+    left_wrist_yaw_joint: 3.0
+    left_wrist_pitch_joint: 3.0
+    left_wrist_roll_joint: 3.0
+    right_shoulder_pitch_joint: 3.0
+    right_shoulder_roll_joint: 3.0
+    right_shoulder_yaw_joint: 3.0
+    right_elbow_joint: 3.0
+    right_wrist_yaw_joint: 3.0
+    right_wrist_pitch_joint: 3.0
+    right_wrist_roll_joint: 3.0
+    head_yaw_joint: 3.0
+    head_pitch_joint: 3.0
+safety:
+  state_timeout_sec: 0.25
+  joint_limits:
+    left_hip_pitch_joint: [-2.704, 2.556]
+    left_hip_roll_joint: [-0.235, 2.906]
+    left_hip_yaw_joint: [-1.684, 3.430]
+    left_knee_joint: [0.0, 2.4073]
+    left_ankle_pitch_joint: [-0.803, 0.453]
+    left_ankle_roll_joint: [-0.2625, 0.2625]
+    right_hip_pitch_joint: [-2.704, 2.556]
+    right_hip_roll_joint: [-2.906, 0.235]
+    right_hip_yaw_joint: [-3.430, 1.684]
+    right_knee_joint: [0.0, 2.4073]
+    right_ankle_pitch_joint: [-0.803, 0.453]
+    right_ankle_roll_joint: [-0.2625, 0.2625]
+    waist_yaw_joint: [-3.43, 2.382]
+    waist_pitch_joint: [-0.314, 0.314]
+    waist_roll_joint: [-0.488, 0.488]
+    left_shoulder_pitch_joint: [-3.08, 2.04]
+    left_shoulder_roll_joint: [-0.061, 2.993]
+    left_shoulder_yaw_joint: [-2.556, 2.556]
+    left_elbow_joint: [-2.3556, 0.0]
+    left_wrist_yaw_joint: [-2.556, 2.556]
+    left_wrist_pitch_joint: [-0.558, 0.558]
+    left_wrist_roll_joint: [-1.571, 0.724]
+    right_shoulder_pitch_joint: [-3.08, 2.04]
+    right_shoulder_roll_joint: [-2.993, 0.061]
+    right_shoulder_yaw_joint: [-2.556, 2.556]
+    right_elbow_joint: [-2.3556, 0.0]
+    right_wrist_yaw_joint: [-2.556, 2.556]
+    right_wrist_pitch_joint: [-0.558, 0.558]
+    right_wrist_roll_joint: [-0.724, 1.571]
+    head_yaw_joint: [-0.366, 0.366]
+    head_pitch_joint: [-0.3838, 0.3838]
+topics:
+  # HAL IMU names are inverted vs sim: HAL "torso" is physically the PELVIS (root, =
+  # sim imu_0, the skater's proprioception IMU for projected_gravity + base_ang_vel).
+  imu: /aima/hal/imu/torso/state
+  cmd_vel: /cmd_vel
+  joint_state:
+    leg: /aima/hal/joint/leg/state
+    waist: /aima/hal/joint/waist/state
+    arm: /aima/hal/joint/arm/state
+    head: /aima/hal/joint/head/state
+  joint_command:
+    leg: /aima/hal/joint/leg/command
+    waist: /aima/hal/joint/waist/command
+    arm: /aima/hal/joint/arm/command
+    head: /aima/hal/joint/head/command
+command_provider:
+  kind: skate   # selects husky_x2_deploy.SkateCommandProvider ([v, h] + phase clock)

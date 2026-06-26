@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "husky-x2-deploy"
+version = "0.1.0"
+description = "HUSKY skater -> AgiBot X2 Ultra deploy-host adapter (obs/command/export + ROS node)."
+requires-python = ">=3.10"
+# agibot-deploy (the vendored ../agibot_x2_ultra_deploy submodule) is the runtime
+# host. It is not on PyPI; install it editable first (see README). numpy +
+# onnxruntime are pulled in transitively, listed here so the adapter is usable
+# standalone for the offline export/validate path.
+dependencies = [
+  "numpy",
+  "onnxruntime",
+]
+
+[project.optional-dependencies]
+ros = ["PyYAML"]
+
+[project.scripts]
+husky-skate-export = "husky_x2_deploy.export_skater_deploy:main"
+husky-skate-validate = "husky_x2_deploy.validate_skater_parity:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["husky_x2_deploy*"]
