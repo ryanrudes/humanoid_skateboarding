@@ -3,7 +3,7 @@
 import logging
 import os
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -198,6 +198,20 @@ def launch_training(task_id: str, args: TrainConfig | None = None):
 
   # Select GPUs based on CUDA_VISIBLE_DEVICES and user specification.
   selected_gpus, num_gpus = select_gpus(args.gpu_ids)
+
+  # Recording video during multi-GPU training segfaults: the offscreen GL
+  # renderer cannot coexist with NCCL in the torchrunx workers (it corrupts the
+  # worker and crashes, surfacing as a SIGSEGV / a 10-minute NCCL timeout).
+  # Disable it with a clear message instead of crashing. Use a single GPU for
+  # in-training clips, or render a checkpoint separately with `play`.
+  if num_gpus > 1 and args.video:
+    print(
+      "[WARN] --video is not supported with multi-GPU training (the offscreen GL "
+      "renderer conflicts with NCCL). Disabling video for this run. For clips, "
+      "train on one GPU (--gpu-ids 0), or render a checkpoint with `play`.",
+      flush=True,
+    )
+    args = replace(args, video=False)
 
   # Set environment variables for all modes.
   if selected_gpus is None:
