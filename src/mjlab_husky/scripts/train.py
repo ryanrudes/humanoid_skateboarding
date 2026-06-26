@@ -3,7 +3,7 @@
 import logging
 import os
 import sys
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -199,19 +199,20 @@ def launch_training(task_id: str, args: TrainConfig | None = None):
   # Select GPUs based on CUDA_VISIBLE_DEVICES and user specification.
   selected_gpus, num_gpus = select_gpus(args.gpu_ids)
 
-  # Recording video during multi-GPU training segfaults: the offscreen GL
-  # renderer cannot coexist with NCCL in the torchrunx workers (it corrupts the
-  # worker and crashes, surfacing as a SIGSEGV / a 10-minute NCCL timeout).
-  # Disable it with a clear message instead of crashing. Use a single GPU for
-  # in-training clips, or render a checkpoint separately with `play`.
+  # Video on multi-GPU works -- only rank 0 renders (see run_train), and that
+  # coexists with NCCL. But rendering makes rank 0 momentarily slower than the
+  # other ranks, which wait for it at the gradient all-reduce; a very frequent
+  # cadence (or heavy contention for another rank's GPU) can stretch that wait
+  # past the NCCL timeout. Keep --video-every-iters high (the default is) and
+  # fall back to one GPU if a run ever stalls.
   if num_gpus > 1 and args.video:
     print(
-      "[WARN] --video is not supported with multi-GPU training (the offscreen GL "
-      "renderer conflicts with NCCL). Disabling video for this run. For clips, "
-      "train on one GPU (--gpu-ids 0), or render a checkpoint with `play`.",
+      "[INFO] Recording video with multiple GPUs: only rank 0 renders, which adds "
+      "a small sync cost there. Keep --video-every-iters high (default is fine); a "
+      "very frequent cadence can stall the gradient all-reduce -- use --gpu-ids 0 "
+      "if a run hangs.",
       flush=True,
     )
-    args = replace(args, video=False)
 
   # Set environment variables for all modes.
   if selected_gpus is None:
