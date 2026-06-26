@@ -392,6 +392,64 @@ class AMPOnPolicyRunner:
             self.current_learning_iteration = loaded_dict["iter"]
         return loaded_dict["infos"]
 
+    def load_policy_only(
+        self,
+        path: str,
+        *,
+        load_normalizer: bool = True,
+        map_location: str | None = None,
+    ) -> list[str]:
+        """Warm-start: initialize the actor-critic from a *donor* checkpoint WITHOUT
+        restoring the optimizer, AMP discriminator/normalizer, or the iteration
+        counter — i.e. start a FRESH run (iter 0, fresh optimizer + fresh adversary)
+        from a donor policy's weights. Unlike ``load()`` (which always restores the
+        optimizer and hijacks ``current_learning_iteration``), this is the correct
+        path for "use another policy as a warm start".
+
+        Only tensors whose name and shape match the current policy are copied;
+        anything missing or shape-mismatched is skipped (and returned) rather than
+        raising, so a donor with a compatible obs/action shape still works if e.g. the
+        normalization config differs. The obs/action *dimension-defining* tensors (the
+        actor/critic input layers and the action std) MUST match — otherwise the donor
+        is incompatible and this raises loudly. ``load_normalizer=False`` also skips
+        the obs-normalizer running stats so they re-estimate for the new env.
+        """
+        donor = torch.load(path, weights_only=False, map_location=map_location)
+        src = donor.get("model_state_dict", donor) if isinstance(donor, dict) else donor
+        dst = self.alg.policy.state_dict()
+
+        to_load: dict = {}
+        skipped: list[str] = []
+        for k, v in dst.items():
+            if not load_normalizer and "obs_normalizer" in k:
+                skipped.append(f"{k} (normalizer skipped)")
+                continue
+            if k in src and tuple(src[k].shape) == tuple(v.shape):
+                to_load[k] = src[k]
+            else:
+                why = "missing in donor" if k not in src else f"shape {tuple(src[k].shape)} != {tuple(v.shape)}"
+                skipped.append(f"{k} ({why})")
+
+        # The donor must share obs + action dims: those live in the input layers and
+        # the action std. If they don't match, this is the wrong donor — refuse.
+        dim_keys = [k for k in dst if k in ("std", "log_std", "actor.0.weight", "critic.0.weight")]
+        incompatible = [k for k in dim_keys if k not in to_load]
+        if incompatible:
+            raise RuntimeError(
+                f"warm-start donor {path} is incompatible with the current policy: the "
+                f"dimension-defining tensors {incompatible} do not match (different obs/action "
+                f"shape or hidden sizes). A warm start requires matching obs and action dims."
+            )
+
+        self.alg.policy.load_state_dict(to_load, strict=False)
+        print(f"[warm-start] initialized {len(to_load)}/{len(dst)} policy tensors from {path}")
+        if skipped:
+            shown = "; ".join(skipped[:8]) + (" ..." if len(skipped) > 8 else "")
+            print(f"[warm-start] skipped {len(skipped)} tensor(s): {shown}")
+        print("[warm-start] optimizer, AMP discriminator/normalizer, and iteration counter are NOT "
+              "restored — training starts fresh at iteration 0.")
+        return skipped
+
     def get_inference_policy(self, device=None):
         self.eval_mode()  # switch to evaluation mode (dropout for example)
         if device is not None:

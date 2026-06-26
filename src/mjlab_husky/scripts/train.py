@@ -44,6 +44,17 @@ class TrainConfig:
   enable_nan_guard: bool = False
   torchrunx_log_dir: str | None = None
   wandb_run_path: str | None = None
+  warm_start_checkpoint: str | None = None
+  """Path to a donor .pt checkpoint to WARM-START from: initialize the actor-critic
+  from its weights (when the obs/action shapes match) and then train FRESH — a new run
+  at iteration 0, with a fresh optimizer and a fresh AMP discriminator. Unlike
+  --agent.resume (which restores the optimizer + the donor's iteration counter and only
+  searches the same experiment dir), this accepts any checkpoint path. Use it to
+  continue a partly-trained policy onto a changed env (e.g. the fixed-mesh X2 from the
+  old X2 checkpoint). Mutually exclusive with --agent.resume."""
+  warm_start_load_normalizer: bool = True
+  """When warm-starting, also copy the donor's obs-normalizer running stats (set False
+  to re-estimate them fresh for the new env)."""
   gpu_ids: list[int] | Literal["all"] | None = field(default_factory=lambda: [0])
 
   @staticmethod
@@ -169,7 +180,18 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
 
   add_wandb_tags(cfg.agent.wandb_tags)
   runner.add_git_repo_to_log(__file__)
-  if resume_path is not None:
+  if cfg.warm_start_checkpoint is not None:
+    if cfg.agent.resume:
+      raise ValueError(
+        "--warm-start-checkpoint and --agent.resume are mutually exclusive; warm-start "
+        "always begins a fresh run at iteration 0 (use --agent.resume to continue a run)."
+      )
+    ws_path = Path(cfg.warm_start_checkpoint)
+    if not ws_path.exists():
+      raise FileNotFoundError(f"warm-start checkpoint not found: {ws_path}")
+    print(f"[INFO]: Warm-starting policy from donor checkpoint: {ws_path}")
+    runner.load_policy_only(str(ws_path), load_normalizer=cfg.warm_start_load_normalizer)
+  elif resume_path is not None:
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     runner.load(str(resume_path))
 
