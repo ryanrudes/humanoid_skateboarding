@@ -367,6 +367,15 @@ class AMPOnPolicyRunner:
         if hasattr(self.alg, "rnd") and self.alg.rnd:
             saved_dict["rnd_state_dict"] = self.alg.rnd.state_dict()
             saved_dict["rnd_optimizer_state_dict"] = self.alg.rnd_optimizer.state_dict()
+        # -- Save the AMP discriminator + its observation normalizer. The push-phase
+        #    reward is produced by the discriminator (see learn()), so without these a
+        #    resumed run reinitializes them from scratch and the AMP reward resets. The
+        #    discriminator's optimizer moments already ride in optimizer_state_dict (its
+        #    params share self.alg.optimizer), so only the weights + normalizer are
+        #    stored here for a fully seamless resume.
+        if self.amp_enabled:
+            saved_dict["discriminator_state_dict"] = self.alg.discriminator.state_dict()
+            saved_dict["amp_normalizer"] = self.alg.amp_normalizer
         torch.save(saved_dict, path)
 
         # upload model to external logging service
@@ -390,6 +399,29 @@ class AMPOnPolicyRunner:
         # -- load current learning iteration
         if resumed_training:
             self.current_learning_iteration = loaded_dict["iter"]
+        # -- Load the AMP discriminator + normalizer for a fully seamless resume.
+        #    Checkpoints written before discriminator checkpointing was added do not
+        #    contain these keys: resume still proceeds (the actor-critic, optimizer,
+        #    obs normalizer and iteration counter are restored above), but the
+        #    discriminator/normalizer stay freshly initialized, so the push-phase AMP
+        #    reward resets and re-warms. Warn loudly in that case.
+        if self.amp_enabled:
+            if "discriminator_state_dict" in loaded_dict:
+                self.alg.discriminator.load_state_dict(loaded_dict["discriminator_state_dict"])
+                if loaded_dict.get("amp_normalizer") is not None:
+                    self.amp_normalizer = self.alg.amp_normalizer = loaded_dict["amp_normalizer"]
+            elif not self.disable_logs:
+                print("=" * 80)
+                print("[resume][WARNING] AMP discriminator NOT found in checkpoint:")
+                print(f"    {path}")
+                print("    This checkpoint predates discriminator checkpointing, so the AMP")
+                print("    discriminator and amp_normalizer are being re-initialized FRESH.")
+                print("    The push-phase AMP reward will RESET and re-warm over the next")
+                print("    iterations. The actor-critic, optimizer, obs normalizer and the")
+                print("    iteration counter ARE fully restored -- this is a transient dip,")
+                print("    not a from-scratch restart. Checkpoints saved from here on embed")
+                print("    the discriminator, so future resumes will be fully seamless.")
+                print("=" * 80)
         return loaded_dict["infos"]
 
     def load_policy_only(
