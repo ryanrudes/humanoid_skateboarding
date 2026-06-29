@@ -184,8 +184,8 @@ def agibot_x2_skater_env_cfg(play: bool = False) -> G1SkaterManagerBasedRlEnvCfg
   # steer stance retargeted onto the X2 (name remap + leg IK) and is kept in sync
   # with dataset/ref_pose/x2_steer_start_pose_b.npy by scripts/gen_ref_pose.py.
   cfg.steer_init_pos = [
-    -0.546, 0.21, 0.282, 0.825, -0.422, -0.025,   # left leg
-    -0.588, 0.033, 0.117, 0.621, -0.191, 0.067,   # right leg
+    -0.536, 0.207, 0.285, 0.804, -0.43, -0.017,   # left leg
+    -0.564, 0.03, 0.115, 0.571, -0.197, 0.09,     # right leg
     -0.01, 0.077, 0.109,                          # waist (yaw, pitch, roll)
     0.0, 0.55, -0.25, -0.55, 0.0, 0.0, 0.0,       # left arm
     0.0, -0.55, -0.25, -0.55, 0.0, 0.0, 0.0,      # right arm

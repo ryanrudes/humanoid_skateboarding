@@ -95,6 +95,30 @@ def _lowest_foot_sphere_z(model, data, side: str) -> float:
   return lo
 
 
+def _level_quat(quat) -> np.ndarray:
+  """Flatten a foot orientation onto the surface, keeping its toe heading.
+
+  The X2 foot's collision spheres lie in the ankle frame's z = const (sole) plane, so a
+  sole parallel to the (horizontal) deck/ground means the ankle z-axis points world-up.
+  Build that: z -> world up, x -> the horizontal heading of the input's toe (+x) axis,
+  y = z x x. Replaces inheriting the G1's tilted ankle, which left the X2 sole resting on
+  an edge ~10 deg off horizontal.
+  """
+  R = np.zeros(9)
+  mujoco.mju_quat2Mat(R, np.asarray(quat, dtype=np.float64))
+  fwd = R.reshape(3, 3)[:, 0].copy()  # toe (+x) direction in world
+  fwd[2] = 0.0
+  if np.linalg.norm(fwd) < 1e-6:
+    fwd = np.array([1.0, 0.0, 0.0])  # toe pointing ~straight up/down: pick an arbitrary heading
+  fwd /= np.linalg.norm(fwd)
+  z = np.array([0.0, 0.0, 1.0])
+  y = np.cross(z, fwd); y /= np.linalg.norm(y)
+  x = np.cross(y, z)
+  out = np.zeros(4)
+  mujoco.mju_mat2Quat(out, np.column_stack([x, y, z]).reshape(9))
+  return out
+
+
 _LEGS = {
   "left": [f"left_{j}" for j in
            ("hip_pitch_joint", "hip_roll_joint", "hip_yaw_joint", "knee_joint",
@@ -227,6 +251,7 @@ def main() -> None:
       target_w = (board_pos + g1_ref[g1_ankle_row[side], :3]).astype(np.float64)  # board is identity orientation
       target_quat = g1_ref[g1_ankle_row[side], 3:7].astype(np.float64)
       target_quat = target_quat / np.linalg.norm(target_quat)
+      target_quat = _level_quat(target_quat)  # flat sole (parallel to deck/ground), keep heading
       weights = _W_PLANTED if on_deck else _W_PUSHING
       # The X2's legs are ~10 cm shorter than the G1's, so the pushing foot can't
       # reach the G1's far+low position; iterate harder/stiffer to extend it as far
