@@ -41,7 +41,7 @@ The X2 reference poses and AMP push clips are generated, not authored:
 `test_scene/mjlab_scene_x2.xml` for sim.py). Both the poses and the retarget are
 coarse and need tuning.
 
-CLI parsing (both `train` and `play`) is two-stage tyro: the **first positional arg picks the task** from the registry, then remaining flags configure the dataclass with nested overrides — e.g. `--env.scene.num-envs 4096`, `--agent.max-iterations 60000`, `--video`. Multi-GPU is automatic: `--gpu-ids` defaults to `[0]`; pass a list or `all` and >1 GPU triggers a `torchrunx` launch (`MUJOCO_GL=egl` is set for you).
+CLI parsing (both `train` and `play`) is two-stage tyro: the **first positional arg picks the task** from the registry, then remaining flags configure the dataclass with nested overrides — e.g. `--env.scene.num-envs 4096`, `--agent.max-iterations 60000`, `--video`. Multi-GPU is automatic: `--gpu-ids` defaults to `[0]`; pass a list or `all` and >1 GPU triggers a `torchrunx` launch (`MUJOCO_GL=egl` is set for you). Gradients are mean-reduced across ranks, so plain `--env.scene.num-envs N` is **per-GPU** — using >1 GPU that way multiplies the global batch (more data, diminishing returns), not the speed. To instead spend GPUs on **wall-clock** at a fixed batch, pass `--global-num-envs N`: it sets per-rank envs to `N // num_gpus`, so the effective batch matches a single-GPU run with `N` envs while collection is split across GPUs (`train.py::_apply_global_num_envs`). Speedup is bounded by env.step's fixed per-step CPU/sync overhead (~1.3× at 2 GPUs, asymptote ~1.8×).
 
 Logs/checkpoints land in `logs/rsl_rl/<experiment_name>/<timestamp>/` (`experiment_name="g1_skater"`). `logs/`, `wandb/`, and `video/` are git-ignored.
 

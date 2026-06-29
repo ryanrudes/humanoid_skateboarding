@@ -56,6 +56,14 @@ class TrainConfig:
   """When warm-starting, also copy the donor's obs-normalizer running stats (set False
   to re-estimate them fresh for the new env)."""
   gpu_ids: list[int] | Literal["all"] | None = field(default_factory=lambda: [0])
+  global_num_envs: int | None = None
+  """Treat this as the GLOBAL number of environments (the total across all GPUs) and
+  split it evenly: each rank gets global_num_envs // num_gpus envs. Gradients are
+  mean-reduced across ranks, so this keeps the effective batch -- and thus the training
+  dynamics -- identical to a single-GPU run with this many envs, while spreading
+  collection across the GPUs to cut wall-clock. Use it to turn extra GPUs into SPEED
+  rather than a larger (redundant) batch. Overrides --env.scene.num-envs; on a single
+  GPU it is equivalent to passing --env.scene.num-envs global_num_envs."""
 
   @staticmethod
   def from_task(task_id: str) -> "TrainConfig":
@@ -207,6 +215,39 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
   env.close()
 
 
+def _apply_global_num_envs(args: "TrainConfig", num_gpus: int) -> None:
+  """Split a fixed GLOBAL env count across ranks for a wall-clock speedup.
+
+  When --global-num-envs is set, give each of the ``num_gpus`` ranks
+  ``global_num_envs // num_gpus`` envs. Gradients are mean-reduced across ranks
+  (AMP_PPO.reduce_parameters all-reduces the SUM then divides by world_size), so the
+  effective batch -- and therefore the training dynamics -- match a single-GPU run with
+  ``global_num_envs`` envs; the extra GPUs cut wall-clock instead of inflating the batch
+  with redundant data. No-op when the flag is unset. Mutates args.env.scene.num_envs in
+  place (the nested env cfg is mutable even though TrainConfig is frozen).
+  """
+  if args.global_num_envs is None:
+    return
+  num_gpus = max(1, num_gpus)
+  per_rank = args.global_num_envs // num_gpus
+  if per_rank < 1:
+    raise ValueError(
+      f"--global-num-envs ({args.global_num_envs}) must be >= the number of GPUs "
+      f"({num_gpus}); each rank needs at least one environment."
+    )
+  effective = per_rank * num_gpus
+  if effective != args.global_num_envs:
+    print(
+      f"[INFO] --global-num-envs {args.global_num_envs} is not divisible by {num_gpus} "
+      f"GPU(s); rounding down to {per_rank}/GPU = {effective} global envs."
+    )
+  args.env.scene.num_envs = per_rank
+  print(
+    f"[INFO] Fixed-batch multi-GPU: {per_rank} envs/GPU x {num_gpus} GPU(s) = "
+    f"{effective} global envs (effective batch == a single-GPU run with {effective} envs)."
+  )
+
+
 def launch_training(task_id: str, args: TrainConfig | None = None):
   args = args or TrainConfig.from_task(task_id)
 
@@ -220,6 +261,12 @@ def launch_training(task_id: str, args: TrainConfig | None = None):
 
   # Select GPUs based on CUDA_VISIBLE_DEVICES and user specification.
   selected_gpus, num_gpus = select_gpus(args.gpu_ids)
+
+  # If --global-num-envs is set, split that fixed global env count across the ranks so
+  # the extra GPUs cut wall-clock instead of inflating the (already-saturated) batch.
+  # Done here, before dispatch, so both the single-GPU and torchrunx paths see the
+  # adjusted per-rank num_envs.
+  _apply_global_num_envs(args, num_gpus)
 
   # Video on multi-GPU works -- only rank 0 renders (see run_train), and that
   # coexists with NCCL. But rendering makes rank 0 momentarily slower than the
