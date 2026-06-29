@@ -16,6 +16,9 @@ video
 wandb
 logs
 agents
+sweep_logs
+bench-*.csv
+sweep-bench-*.csv
 
 # Claude Code local config / worktrees
 .claude
