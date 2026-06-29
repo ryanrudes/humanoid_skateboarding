@@ -85,6 +85,16 @@ def _set_qpos(model, data, root_pos, root_quat, joint_pos: dict[str, float]) -> 
   mujoco.mj_forward(model, data)
 
 
+def _lowest_foot_sphere_z(model, data, side: str) -> float:
+  """World-z of the lowest point of `side`'s foot collision spheres (uses current data)."""
+  lo = float("inf")
+  for g in range(model.ngeom):
+    nm = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, g) or ""
+    if f"{side}_foot" in nm and nm.endswith("_collision"):
+      lo = min(lo, float(data.geom_xpos[g, 2] - model.geom_size[g, 0]))
+  return lo
+
+
 _LEGS = {
   "left": [f"left_{j}" for j in
            ("hip_pitch_joint", "hip_roll_joint", "hip_yaw_joint", "knee_joint",
@@ -204,26 +214,39 @@ def main() -> None:
     _pose_ik(x2_model, data, x2_torso_id, data.xpos[x2_torso_id].copy(), torso_quat,
              _WAIST, _W_ORIENT)
 
+    # Surfaces the X2 soles must rest on: the on-deck foot on the deck top
+    # (board height + the deck-collision box half-thickness, 0.01), the pushing foot
+    # on the ground (z=0).
+    DECK_TOP = float(board_pos[2]) + 0.01
+    GROUND = 0.0
+
     ik_err = []
     for side in ("left", "right"):
       on_deck = g1_ref[g1_ankle_row[side], 2] > 0.02
-      target_w = board_pos + g1_ref[g1_ankle_row[side], :3]  # board has identity orientation
-      # The X2 foot sits ~0.068 below its ankle (vs the G1's ~0.04); for a foot
-      # planted on the deck, lift the ankle target so the taller X2 sole clears it
-      # instead of clipping through.
-      if on_deck:
-        target_w = target_w + np.array([0.0, 0.0, 0.035])
-      target_quat = g1_ref[g1_ankle_row[side], 3:7].astype(np.float64)  # board is identity
+      surf = DECK_TOP if on_deck else GROUND
+      target_w = (board_pos + g1_ref[g1_ankle_row[side], :3]).astype(np.float64)  # board is identity orientation
+      target_quat = g1_ref[g1_ankle_row[side], 3:7].astype(np.float64)
       target_quat = target_quat / np.linalg.norm(target_quat)
       weights = _W_PLANTED if on_deck else _W_PUSHING
       # The X2's legs are ~10 cm shorter than the G1's, so the pushing foot can't
       # reach the G1's far+low position; iterate harder/stiffer to extend it as far
       # toward the ground as the leg allows.
       iters, lam = (600, 0.05) if on_deck else (1500, 0.02)
-      ik_err.append(
-        _pose_ik(x2_model, data, x2_ankle_id[side], target_w, target_quat,
-                 _LEGS[side], weights, iters=iters, lam=lam)
-      )
+      err = _pose_ik(x2_model, data, x2_ankle_id[side], target_w, target_quat,
+                     _LEGS[side], weights, iters=iters, lam=lam)
+      # Seat the SOLE on the surface: the IK targets the ANKLE, but the X2 sole sits
+      # ~7cm below it, so shift the ankle target vertically until the lowest foot
+      # collision sphere rests at the surface (+1mm clearance), re-IKing each time.
+      # Removes the ~1cm deck/ground clipping the fixed ankle target left.
+      for _ in range(8):
+        mujoco.mj_forward(x2_model, data)
+        dz = (surf + 0.001) - _lowest_foot_sphere_z(x2_model, data, side)
+        if abs(dz) < 3e-4:
+          break
+        target_w = target_w + np.array([0.0, 0.0, dz])
+        err = _pose_ik(x2_model, data, x2_ankle_id[side], target_w, target_quat,
+                       _LEGS[side], weights, iters=iters, lam=lam)
+      ik_err.append(err)
     mujoco.mj_forward(x2_model, data)
     ref = _body_poses_in_board_frame(x2_model, data, board_pos, board_quat)
     np.save(path, ref)

@@ -167,12 +167,12 @@ PUSH_INIT_KEYFRAME = EntityCfg.InitialStateCfg(
   pos=(-0.1667, 0.1467, 0.6682),
   rot=(0.9913, -0.025, 0.013, 0.1286),  # ~15 deg yaw, wxyz
   joint_pos={
-    "left_hip_pitch_joint": -0.245, "left_hip_roll_joint": 0.032,
-    "left_hip_yaw_joint": -0.096, "left_knee_joint": 0.0,
-    "left_ankle_pitch_joint": 0.174, "left_ankle_roll_joint": -0.123,
-    "right_hip_pitch_joint": -0.862, "right_hip_roll_joint": -0.238,
-    "right_hip_yaw_joint": -0.283, "right_knee_joint": 0.966,
-    "right_ankle_pitch_joint": -0.121, "right_ankle_roll_joint": -0.17,
+    "left_hip_pitch_joint": -0.453, "left_hip_roll_joint": 0.012,
+    "left_hip_yaw_joint": -0.101, "left_knee_joint": 0.274,
+    "left_ankle_pitch_joint": -0.007, "left_ankle_roll_joint": -0.123,
+    "right_hip_pitch_joint": -0.899, "right_hip_roll_joint": -0.249,
+    "right_hip_yaw_joint": -0.274, "right_knee_joint": 1.032,
+    "right_ankle_pitch_joint": -0.149, "right_ankle_roll_joint": -0.17,
     "waist_yaw_joint": -0.308, "waist_pitch_joint": 0.247, "waist_roll_joint": -0.047,
     "left_shoulder_pitch_joint": -0.03, "left_shoulder_roll_joint": 0.45,
     "left_shoulder_yaw_joint": -0.21, "left_elbow_joint": -1.32,
