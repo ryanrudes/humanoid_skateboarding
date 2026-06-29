@@ -309,10 +309,17 @@ class RealTimePolicyController:
             if self.num_actions == ROBOT_STAND_DOF_POS.shape[0]:
                 self.robot_init_dof_pos = ROBOT_STAND_DOF_POS.copy()
             else:
-                print(f"[WARN] init_pose='stand' is only defined for the "
-                      f"{ROBOT_STAND_DOF_POS.shape[0]}-dof G1; using 'default' for this "
-                      f"{self.num_actions}-dof robot.")
-                self.robot_init_dof_pos = self.robot_default_dof_pos.copy()
+                # No hand-authored stance for this robot. Use the model's
+                # zero/nominal joint configuration: for these humanoids that is
+                # an upright, symmetric, feet-flat stand (straight legs, arms at
+                # the sides). This is the right "placed on flat ground" start --
+                # unlike 'default' (the skating reference pose), whose ankles are
+                # angled to sit on the board deck, so on flat ground the feet are
+                # not parallel to the ground and the robot rests on its foot
+                # edges and leans back.
+                print(f"[INFO] init_pose='stand': no hand-authored stance for this "
+                      f"{self.num_actions}-dof robot; using the zero/nominal upright stand.")
+                self.robot_init_dof_pos = np.zeros(self.num_actions, dtype=np.float32)
         else:
             raise ValueError(f"Unknown init_pose: {init_pose!r} (expected 'stand' or 'default')")
 
