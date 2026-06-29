@@ -24,7 +24,7 @@ os.sys.path.insert(0, parentdir)
 import numpy as np
 
 from rsl_rl.utils import pose3d
-# from pybullet_utils import transformations
+# from rsl_rl.utils import transformations
 
 
 def standardize_quaternion(q):

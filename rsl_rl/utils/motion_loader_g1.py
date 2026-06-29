@@ -6,7 +6,7 @@ import logging
 
 import torch
 import numpy as np
-from pybullet_utils import transformations
+from rsl_rl.utils import transformations
 
 from rsl_rl.utils import motion_util
 

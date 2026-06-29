@@ -19,7 +19,6 @@ dependencies = [
     # `[tool.uv.sources]` for why it is fetched from PyPI by URL.
     "mujoco==3.7.0",
     "onnxruntime",
-    "pybullet",
     "rsl-rl-lib",
     "pynput",
     # mjlab (13212ad) imports scipy in mjlab.terrains but never declares it as a
