@@ -35,6 +35,7 @@ SEED="${SEED:-1}"
 NUM_ENVS_SET="${NUM_ENVS_SET:-1024 2048 4096 8192}"
 MAX_N="${MAX_N:-32}"                            # hard cap on co-location density (backstop; the plateau usually stops first)
 PLATEAU="${PLATEAU:-1.05}"                      # stop ramping when doubling N gives < this x more aggregate throughput
+KNEE_TOL="${KNEE_TOL:-0.03}"                    # recommend the 'knee': least packing within this fraction of peak throughput
 RESULTS="sweep-bench-${SLURM_JOB_ID:-local}.csv"
 SCR="${SLURM_TMPDIR:-/tmp}/sweepbench.${SLURM_JOB_ID:-$$}"; mkdir -p "$SCR"
 export WANDB_MODE=disabled MUJOCO_GL=egl NCCL_P2P_DISABLE=1
@@ -90,7 +91,7 @@ permed = round(st.median(per)) if per else 0
 print(f"{mps},{N},{E},{agg},{permed},,{peak},{status}")
 PY
 )
-  echo "$row" >> "$RESULTS"
+  LAST_ROW="$row"                               # ramp() appends the FINAL attempt (after any retry)
   LAST_AGG=$(printf '%s' "$row" | cut -d, -f4)
   LAST_STATUS=$(printf '%s' "$row" | cut -d, -f8)
   echo "    mps=$mps N=$N E=$E -> agg=${LAST_AGG} steps/s  mem=${peak}MB  [$LAST_STATUS]"
@@ -103,7 +104,12 @@ ramp() {
   while [ "$N" -le "$MAX_N" ]; do
     run_config "$mps" "$N" "$E"
     if [ "$LAST_STATUS" != "ok" ]; then
-      echo "    stop: N=$N did not run cleanly ($LAST_STATUS) -- past this GPU's limit for $E envs."; break
+      echo "    N=$N failed ($LAST_STATUS) -- retrying once to tell a transient crash from a real OOM..."
+      run_config "$mps" "$N" "$E"
+    fi
+    echo "$LAST_ROW" >> "$RESULTS"                # record the final attempt (post-retry)
+    if [ "$LAST_STATUS" != "ok" ]; then
+      echo "    stop: N=$N failed twice -- real limit for $E envs on this GPU."; break
     fi
     if [ "$N" -gt 1 ] && awk "BEGIN{exit !($LAST_AGG < $prev * $PLATEAU)}"; then
       echo "    stop: throughput plateau at N=$N (agg $LAST_AGG <= ${PLATEAU}x prev $prev)."; break
@@ -127,11 +133,12 @@ if start_mps; then echo "[INFO] MPS started."; for E in $NUM_ENVS_SET; do ramp "
 else echo "[INFO] MPS unavailable/disabled -- time-sliced numbers only."; fi
 
 # ---------------- fill per-run-vs-solo, ranked table + recommendation ----------------
-python3 - "$RESULTS" <<'PY'
+python3 - "$RESULTS" "$KNEE_TOL" <<'PY'
 import csv, sys
 rows = list(csv.DictReader(open(sys.argv[1])))
 if not rows:
     raise SystemExit("[!] no results rows")
+KNEE = float(sys.argv[2]) if len(sys.argv) > 2 else 0.03
 solo = {(r['mps'], r['num_envs']): float(r['per_run_steps_per_s'])
         for r in rows if r['n_runs'] == '1' and r['status'] == 'ok' and r['per_run_steps_per_s'] not in ('', '0')}
 for r in rows:
@@ -147,19 +154,30 @@ for r in sorted(rows, key=lambda r: (r['mps'], int(r['num_envs']), int(r['n_runs
 
 ok = [r for r in rows if r['status'] == 'ok' and float(r['agg_steps_per_s']) > 0]
 if ok:
-    best = max(ok, key=lambda r: float(r['agg_steps_per_s']))
-    base = max((r for r in ok if r['n_runs'] == '1'), key=lambda r: float(r['agg_steps_per_s']), default=None)
+    def agg(r): return float(r['agg_steps_per_s'])
+    # 'knee' per num_envs: the LEAST packing (smallest n_runs) whose aggregate is within
+    # KNEE of that num_envs's peak -- avoids over-packing for a sub-1% gain at 2x the memory.
+    knees = {}
+    for E in sorted({r['num_envs'] for r in ok}, key=int):
+        grp = [r for r in ok if r['num_envs'] == E]
+        peak = max(agg(r) for r in grp)
+        knees[E] = min((r for r in grp if agg(r) >= peak * (1 - KNEE)), key=lambda r: int(r['n_runs']))
+    best = max(knees.values(), key=agg)                       # headline = highest-throughput knee
+    base = max((r for r in ok if r['n_runs'] == '1'), key=agg, default=None)
     print("\n----------------------------------- RECOMMENDATION -----------------------------------")
     print(f"  Pack {best['n_runs']} runs @ {best['num_envs']} envs each per GPU (MPS {best['mps']}):")
     print(f"    aggregate {best['agg_steps_per_s']} env-steps/s/GPU  |  each run at {best['per_run_vs_solo']}x its solo speed  |  peak mem {best['peak_gpu_mem_MB']} MB")
     if base:
-        print(f"    => {float(best['agg_steps_per_s'])/float(base['agg_steps_per_s']):.2f}x the throughput of 1 run/GPU. Replicate this packing on every GPU.")
-    print("\n  best aggregate at each num_envs (bigger envs = bigger PPO batch = better sample efficiency):")
-    for E in sorted({r['num_envs'] for r in ok}, key=int):
-        b = max((r for r in ok if r['num_envs'] == E), key=lambda r: float(r['agg_steps_per_s']))
-        print(f"    {E:>5} envs -> {b['n_runs']} runs/GPU, {b['agg_steps_per_s']} steps/s/GPU, MPS {b['mps']}, mem {b['peak_gpu_mem_MB']} MB")
-    print("\n  NOTE: the launcher default is the largest num_envs whose aggregate is near the max")
-    print("        (faithful batch); drop to a smaller num_envs only if your sweep tolerates it.")
+        print(f"    => {agg(best)/agg(base):.2f}x the throughput of 1 run/GPU. Replicate this packing on every GPU.")
+    print(f"\n  knee at each num_envs (least packing within {KNEE*100:.0f}% of that batch's peak; bigger envs = better sample efficiency):")
+    for E in sorted(knees, key=int):
+        k = knees[E]
+        print(f"    {E:>5} envs -> {k['n_runs']} runs/GPU, {k['agg_steps_per_s']} steps/s/GPU, MPS {k['mps']}, mem {k['peak_gpu_mem_MB']} MB")
+    faith = knees.get('4096')
+    if faith and faith is not best:
+        print(f"\n  FAITHFUL 4096 batch: {faith['n_runs']} runs/GPU -> {faith['agg_steps_per_s']} steps/s/GPU "
+              f"({agg(faith)/agg(best)*100:.0f}% of the headline, but a 4x-larger, better-converging batch).")
+    print("\n  NOTE: headline maximizes throughput; prefer the largest num_envs your sweep tolerates.")
 else:
     print("\n[!] no config ran cleanly -- check the .out (e.g. the GPU/driver may need a newer warp/CUDA, or num_envs too large).")
 PY
