@@ -8,9 +8,9 @@ model:
   path: ""
 control:
   rate_hz: 50.0               # MUST equal the policy control_dt (0.02 s); the phase clock advances once per tick
-  soft_start_secs: 5.0        # ramp from the caught pose to default_joint_pos (PUSH_INIT) over this window; tune on the gantry
-  policy_fade_secs: 1.0       # blend the policy in over this window after soft-start
-  stand_only: false           # set true to only hold the caught/default pose (verify gains first), false to run the policy
+  soft_start_secs: 30.0        # only delays policy start (used when stand_only=false); NOT a position ramp — the joint PD drives to stand_pose, approach speed = stand gains
+  policy_fade_secs: 0.0       # blend the policy in over this window after soft-start
+  stand_only: false           # true = hold stand_pose (= PUSH_INIT, the sim start pose) only, no policy — the demo pose; false = hand off to the policy after soft_start (needs gains + a trained model)
   require_start_trigger: true # arm; publish nothing until /agibot_deploy/start (no uncommanded gap vs `aima em stop-app mc`)
   estop_damping_scale: 1.0
   # Skater obs `heading`: hardware has no absolute world yaw. "start" yaw-normalizes
@@ -35,27 +35,59 @@ control:
       vx: {axis: 1, scale: -1.0}            # left stick Y (push up = forward speed)
       vy: {axis: 0, scale: 1.0}             # unused by the skater
       wz: {axis: 3, scale: -1.0}            # right stick X (left = +heading)
-  # Pre-policy stand pose: EMPTY => hold the model default (PUSH_INIT push stance on the
-  # board). The skater starts on the skateboard, so the free-standing CoM trim below is 0.
-  stand_pose: {}
+  # Pre-policy stand pose = the SIM INITIAL pose (PUSH_INIT_KEYFRAME in
+  # src/mjlab_husky/asset_zoo/robots/agibot_x2/x2_skater_constants.py; matches
+  # dataset/ref_pose/x2_push_start_pose_b.npy) — the pose the robot must hold for the demo.
+  # WHY explicit and not {}: the ONNX default_joint_pos is the SYMMETRIC balance crouch
+  # (both knees +0.669, waist 0), NOT PUSH_INIT, so an empty stand_pose holds the crouch,
+  # not the on-board push stance shown in sim. Every PUSH_INIT joint is overridden below.
+  # ON-BOARD stance (REQUIRES the skateboard under the feet): left foot on the deck / left
+  # knee ~straight, right foot planted to push / right knee deeply bent, torso leaned.
+  # Commanded as a DIRECT setpoint — this host has no trajectory ramp; the joint PD pulls to
+  # it (approach speed = stand gains), so bring up gantry-suspended and verify the gains hold it.
+  # The policy still uses the model default (crouch) for its obs/action offset — unaffected.
+  stand_pose:
+    left_hip_pitch_joint: -0.303
+    left_hip_roll_joint: 0.027
+    left_hip_yaw_joint: -0.099
+    left_knee_joint: 0.0
+    left_ankle_pitch_joint: 0.298
+    left_ankle_roll_joint: -0.007
+    right_hip_pitch_joint: -0.866
+    right_hip_roll_joint: -0.24
+    right_hip_yaw_joint: -0.282
+    right_knee_joint: 0.973
+    right_ankle_pitch_joint: -0.098
+    right_ankle_roll_joint: -0.01
+    waist_yaw_joint: -0.308
+    waist_pitch_joint: -0.247 # 0.247
+    waist_roll_joint: -0.047
+    left_shoulder_pitch_joint: -0.03
+    left_shoulder_roll_joint: 0.45
+    left_shoulder_yaw_joint: -0.21
+    left_elbow_joint: -1.32
+    right_shoulder_pitch_joint: -0.7
+    right_shoulder_roll_joint: -0.845
+    right_shoulder_yaw_joint: 0.83
+    right_elbow_joint: -1.19
   stand_lean: 0.0             # CoM ankle trim is for free-standing balance; N/A on the board. Tune only if standing off-board first.
   # Absolute stand Kp/Kd used during soft-start / stand_only (X2 values from x2_ultra.yaml).
   stand_stiffness:
-    left_hip_pitch_joint: 80.0
+    left_hip_pitch_joint: 120 # 80.0
     left_hip_roll_joint: 60.0
     left_hip_yaw_joint: 45.0
     left_knee_joint: 120.0
     left_ankle_pitch_joint: 80.0
     left_ankle_roll_joint: 40.0
-    right_hip_pitch_joint: 80.0
+    right_hip_pitch_joint: 120 # 80.0
     right_hip_roll_joint: 60.0
     right_hip_yaw_joint: 45.0
     right_knee_joint: 120.0
     right_ankle_pitch_joint: 80.0
     right_ankle_roll_joint: 40.0
-    waist_yaw_joint: 30.0
-    waist_pitch_joint: 30.0
-    waist_roll_joint: 30.0
+    waist_yaw_joint: 120 # 30.0
+    waist_pitch_joint: 120 # 30.0
+    waist_roll_joint: 120 # 30.0
     left_shoulder_pitch_joint: 15.0
     left_shoulder_roll_joint: 15.0
     left_shoulder_yaw_joint: 15.0

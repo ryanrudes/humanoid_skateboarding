@@ -49,14 +49,22 @@ indent-width = 4
 # URLs"), so force the matching mujoco_warp 3.7.0 release (pairs with mujoco
 # 3.7.0; reads flexedge_J_rownnz from MjModel) with an override instead.
 [tool.uv]
+# Resolve only for Linux training/deploy targets; mujoco/warp-lang use
+# platform-specific wheel URLs below.
+environments = [
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "sys_platform == 'linux' and platform_machine == 'aarch64'",
+]
 override-dependencies = [
   "mujoco-warp @ https://files.pythonhosted.org/packages/35/71/7deec6a72e0de526bfaf695e98e07cb0c6828a712e5ab7ee1743b8e4a909/mujoco_warp-3.7.0-py3-none-any.whl",
   # mjlab (13212ad, sim/sim.py) calls wp.context.runtime.driver_version, but
   # warp-lang removed the public `warp.context` namespace in 1.13+, and mjlab
   # routes warp-lang to the NVIDIA nightly index (which now serves 1.15.0.dev).
   # Pin the last 1.12.x release: it keeps wp.context.runtime and satisfies
-  # mujoco_warp 3.7.0's warp-lang>=1.12. (Linux x86_64 wheel; py3, all CPython.)
-  "warp-lang @ https://files.pythonhosted.org/packages/52/79/c30d6f57c98cc5bb850eb0bd0fce2405abb79a368ed5ef65ebb2b0c58dc0/warp_lang-1.12.1-py3-none-manylinux_2_28_x86_64.whl",
+  # mujoco_warp 3.7.0's warp-lang>=1.12. (Linux wheels; py3, all CPython.)
+  "warp-lang @ https://files.pythonhosted.org/packages/52/79/c30d6f57c98cc5bb850eb0bd0fce2405abb79a368ed5ef65ebb2b0c58dc0/warp_lang-1.12.1-py3-none-manylinux_2_28_x86_64.whl ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "warp-lang @ https://files.pythonhosted.org/packages/c7/75/1af98a828a2b132a7a14515cdb050876c403349c7761730584f9f0a637a5/warp_lang-1.12.1-py3-none-manylinux_2_34_aarch64.whl ; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  "warp-lang @ https://files.pythonhosted.org/packages/26/1d/2193d186fc5f9766d8db17b64fad55b97405f1e35f9190623d8d95971519/warp_lang-1.12.1-py3-none-macosx_11_0_arm64.whl ; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
 # torch/torchvision: mjlab intends CUDA 12.8 wheels (it declares a pytorch-cu128
@@ -72,16 +80,22 @@ explicit = true
 [tool.uv.sources]
 mjlab = { git = "https://github.com/mujocolab/mjlab.git", rev = "13212ad" }
 rsl-rl-lib = { path = "rsl_rl", editable = true }
-torch = { index = "pytorch-cu128", marker = "sys_platform != 'darwin'" }
-torchvision = { index = "pytorch-cu128", marker = "sys_platform != 'darwin'" }
+torch = { index = "pytorch-cu128", marker = "sys_platform != 'darwin' and platform_machine == 'x86_64'" }
+torchvision = { index = "pytorch-cu128", marker = "sys_platform != 'darwin' and platform_machine == 'x86_64'" }
 # mjlab and mujoco_warp both pin `mujoco` to the py.mujoco.org nightly index
 # (via their own [tool.uv.sources]/[[tool.uv.index]]), and that index only keeps
 # recent nightlies (>=3.8.1.dev) -- all of which dropped mjENBL_MULTICCD. uv does
 # not let a root project re-route a dependency's pinned index (it raises
 # "conflicting indexes for package mujoco"), so we point mujoco directly at the
 # stable 3.7.0 wheels on PyPI, which a URL source is allowed to override.
-# Linux x86_64 (this repo's CUDA target); add aarch64/macos wheel URLs here if needed.
+# Platform-specific 3.7.0 wheels (PyPI); x86_64 is the CUDA training target.
 mujoco = [
-  { url = "https://files.pythonhosted.org/packages/97/fa/a8698b7bb0168483845f8e492991ee5cf01695eb0d1f20ea7d8bf3d61344/mujoco-3.7.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", marker = "python_full_version < '3.13'" },
-  { url = "https://files.pythonhosted.org/packages/0f/de/4ebdd81f66f2d3879335e0f21f7be9b552d7edbc80c53f31472706d4e338/mujoco-3.7.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", marker = "python_full_version >= '3.13'" },
+  { url = "https://files.pythonhosted.org/packages/97/fa/a8698b7bb0168483845f8e492991ee5cf01695eb0d1f20ea7d8bf3d61344/mujoco-3.7.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", marker = "python_full_version < '3.13' and sys_platform == 'linux' and platform_machine == 'x86_64'" },
+  { url = "https://files.pythonhosted.org/packages/0f/de/4ebdd81f66f2d3879335e0f21f7be9b552d7edbc80c53f31472706d4e338/mujoco-3.7.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", marker = "python_full_version >= '3.13' and sys_platform == 'linux' and platform_machine == 'x86_64'" },
+  { url = "https://files.pythonhosted.org/packages/b8/4d/a92e635cf1d38140c04fd504d07bacfd5d814753449fa75f3e7187660adb/mujoco-3.7.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", marker = "python_full_version < '3.13' and sys_platform == 'linux' and platform_machine == 'aarch64'" },
+  { url = "https://files.pythonhosted.org/packages/64/bf/2180496f94c7a96b4520ad06e54505ef39b84b205ad674494c0d014584be/mujoco-3.7.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", marker = "python_full_version >= '3.13' and sys_platform == 'linux' and platform_machine == 'aarch64'" },
+  { url = "https://files.pythonhosted.org/packages/dc/7d/e1ad3b1b604b009c0df7246b50b5c5cf9e8e0689a10279661951c69850ea/mujoco-3.7.0-cp312-cp312-macosx_10_16_x86_64.whl", marker = "python_full_version < '3.13' and sys_platform == 'darwin' and platform_machine == 'x86_64'" },
+  { url = "https://files.pythonhosted.org/packages/4b/c8/1fedcd0d0b7dd86dd238502bc8ea228c0d48a901ffffc5d39272351c515c/mujoco-3.7.0-cp313-cp313-macosx_10_16_x86_64.whl", marker = "python_full_version >= '3.13' and sys_platform == 'darwin' and platform_machine == 'x86_64'" },
+  { url = "https://files.pythonhosted.org/packages/5b/fc/225a068a2bec3de5029ba08866e03df9f159719cecedfc0cf100d4db6a18/mujoco-3.7.0-cp312-cp312-macosx_11_0_arm64.whl", marker = "python_full_version < '3.13' and sys_platform == 'darwin' and platform_machine == 'arm64'" },
+  { url = "https://files.pythonhosted.org/packages/0f/75/8a54a9de7581f46e8dfb248d8cd2f972ef0d1db6ecfd8a70abb4ab12d56b/mujoco-3.7.0-cp313-cp313-macosx_11_0_arm64.whl", marker = "python_full_version >= '3.13' and sys_platform == 'darwin' and platform_machine == 'arm64'" },
 ]
