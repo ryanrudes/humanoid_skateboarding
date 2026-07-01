@@ -396,6 +396,14 @@ class AMPOnPolicyRunner:
             # -- RND optimizer if used
             if hasattr(self.alg, "rnd") and self.alg.rnd:
                 self.alg.rnd_optimizer.load_state_dict(loaded_dict["rnd_optimizer_state_dict"])
+            # -- restore the adaptive LR the KL schedule reads from. It lives only as a
+            #    plain float on the algorithm (not in model_state_dict or any optimizer
+            #    attr), so without this it reverts to the cfg default (1e-3). Because the
+            #    schedule re-adjusts LR per-minibatch, the first update() then fires a
+            #    burst of steps ~100x over the converged LR before re-annealing, wrecking
+            #    a resumed policy. The converged value already rode in the loaded
+            #    optimizer's param_groups, so read it back from there.
+            self.alg.learning_rate = self.alg.optimizer.param_groups[0]["lr"]
         # -- load current learning iteration
         if resumed_training:
             self.current_learning_iteration = loaded_dict["iter"]
