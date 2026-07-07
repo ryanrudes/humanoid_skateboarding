@@ -39,6 +39,7 @@ def main() -> None:
   import imageio.v2 as imageio
   import mujoco
   import torch
+  from tqdm import tqdm
 
   import mjlab.tasks  # noqa: F401
   import mjlab_husky.tasks  # noqa: F401
@@ -71,7 +72,7 @@ def main() -> None:
   obs, _ = env.reset()
   frames = []
   with torch.inference_mode():
-    for _ in range(args.steps):
+    for _ in tqdm(range(args.steps)):
       obs, _, _, _ = env.step(policy(obs))
       rdata.qpos[:] = raw.sim.data.qpos[0].detach().cpu().numpy()
       rdata.qvel[:] = raw.sim.data.qvel[0].detach().cpu().numpy()
