@@ -6,8 +6,8 @@ Wraps ``uv run train`` with the settings that made the 2026-07 deck-pinch fix wo
   * RESUME (not warm-start): keeps the optimizer, AMP discriminator, amp_normalizer,
     and obs-normalizers — the slow state that protects the skills you already have.
   * LR pinned to the donor's annealed value (read from the checkpoint's optimizer
-    state): on resume, AMP_PPO otherwise resets the LR from the cfg (1e-3) and
-    clobbers every param group on the first minibatch.
+    state). Since 89651c8 the runner also restores this itself on resume, so the
+    pin is redundant insurance — kept because it is free and self-documenting.
   * LOW entropy (default 0.001): a converged policy barely resists the entropy
     bonus, so the default 0.005 ratchets the action std up without bound
     (~+2e-4/iter at 4096 envs) until noise degrades every phase.
