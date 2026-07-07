@@ -238,15 +238,17 @@ def make_g1_skater_env_cfg() -> G1SkaterManagerBasedRlEnvCfg:
         "ranges": (0.8, 1.6),
       },
     ),
-    # Per-env deck length/width DR (custom event: geom_size is not a randomize_field
-    # field, and size changes must atomically co-write rbound/aabb/marker/inertia
-    # from one sample — see mdp/events.py). Disabled in play cfgs (nominal board).
+    # Per-env deck length/width/thickness DR (custom event: geom_size is not a
+    # randomize_field field, and size changes must atomically co-write
+    # rbound/aabb/marker/inertia from one sample — see mdp/events.py). Disabled in
+    # play cfgs (nominal board).
     "board_dims": EventTermCfg(
       mode="startup",
       func=mdp.randomize_board_dims,
       params={
         "length_scale_range": (0.9, 1.1),
         "width_scale_range": (0.9, 1.1),
+        "thickness_scale_range": (0.75, 1.25),
       },
     ),
   }

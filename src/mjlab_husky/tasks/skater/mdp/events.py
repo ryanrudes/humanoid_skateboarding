@@ -17,9 +17,14 @@ of independent ``randomize_field`` terms:
     density, so it must rescale with the dims or the policy trains on
     mislabeled boards.
 
-Deck thickness, trucks, wheels, and the marker SITES are untouched (tier a):
-spawn heights, reference poses, and the wheelbase constant in
-``steer_tilt_guide`` all stay valid. See the board-dims DR feasibility notes.
+Trucks, wheels, and the marker SITES are untouched: the wheelbase constant in
+``steer_tilt_guide`` and the board spawn height stay valid. Thickness DR moves
+the deck TOP by at most +-2.5mm; the robot spawn z is shifted per env to match
+(via per-world ``qpos0``, which is what episode resets restore, plus a
+consistency write to ``default_root_state``). The board-frame reference-pose
+targets are left nominal: a 2.5mm offset costs exp(-2.5mm^2/sigma^2) ~ 0.01%
+of the tracking reward (sigma^2 = 0.05) — noise. See the board-dims DR
+feasibility notes.
 
 Accepted approximation: compile-time constraint-impedance scalars
 (``body_invweight0`` / ``dof_invweight0`` / ``stat.meaninertia``) stay nominal.
@@ -83,19 +88,24 @@ def _box_composite_diag(
   "body_mass",
   "body_inertia",
   "body_ipos",
+  "qpos0",
 )
 def randomize_board_dims(
   env: "ManagerBasedRlEnv",
   env_ids: torch.Tensor | None,
   length_scale_range: tuple[float, float] = (0.9, 1.1),
   width_scale_range: tuple[float, float] = (0.9, 1.1),
+  thickness_scale_range: tuple[float, float] = (0.75, 1.25),
 ) -> None:
-  """Per-env skateboard deck length/width randomization (startup mode).
+  """Per-env skateboard deck length/width/thickness randomization (startup mode).
 
-  Samples one (length_scale, width_scale) pair per env and consistently writes the
-  deck + marker collision boxes (size, bounds, marker position) and the tilt body's
-  mass/inertia/COM. The sampled scales are stored at ``env.board_dims`` (num_envs, 2)
-  for logging / future observation use.
+  Samples one (length, width, thickness) scale triple per env and consistently
+  writes the deck + marker collision boxes (size, bounds, marker position — the
+  marker rides the deck TOP, so its z tracks the thickness to stay flush) and the
+  tilt body's mass/inertia/COM. The deck body z is fixed by the trucks, so
+  thickness moves the top/bottom faces by half the delta each (+-2.5mm at the
+  default range). The sampled scales are stored at ``env.board_dims``
+  (num_envs, 3) for logging / future observation use.
   """
   device = env.device
   if env_ids is None:
@@ -113,6 +123,15 @@ def randomize_board_dims(
     )
     tilt = mujoco.mj_name2id(mjm, mujoco.mjtObj.mjOBJ_BODY, "skateboard/board_tilt_body")
     assert deck >= 0 and marker >= 0 and tilt >= 0, "skateboard geoms/body not found"
+    # Robot free-joint qpos address: episode resets restore qpos from per-world
+    # qpos0 (mjwarp.reset_data), so the spawn-z correction below is written there.
+    free = [
+      j for j in range(mjm.njnt)
+      if mjm.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE
+      and (mujoco.mj_id2name(mjm, mujoco.mjtObj.mjOBJ_JOINT, j) or "").startswith("robot/")
+    ]
+    assert len(free) == 1, f"expected one robot free joint, found {len(free)}"
+    root_qadr = int(mjm.jnt_qposadr[free[0]])
     t = lambda x: torch.tensor(x, device=device, dtype=torch.float32)  # noqa: E731
     # body_inertia is stored in the PRINCIPAL frame (body_iquat); for this body the
     # compiler sorts moments descending, a ~90deg rotation of the geom frame. The
@@ -132,67 +151,84 @@ def randomize_board_dims(
       "tilt_inertia": t(mjm.body_inertia[tilt]),
       "tilt_ipos": t(mjm.body_ipos[tilt]),
       "tilt_R2": (R.reshape(3, 3) ** 2).to(device=device, dtype=torch.float32),
+      "root_qadr": root_qadr,
+      "root_z_nom": float(mjm.qpos0[root_qadr + 2]),
+      "drs_z_nom": float(env.scene["robot"].data.default_root_state[0, 2]),
     }
     env._board_dr_cache = cache
-    env.board_dims = torch.ones(env.num_envs, 2, device=device)
+    env.board_dims = torch.ones(env.num_envs, 3, device=device)
 
   deck, marker, tilt = cache["deck"], cache["marker"], cache["tilt"]
   n = len(env_ids)
 
   # --- sample per-env scales -----------------------------------------------------
-  s_len = (
-    torch.rand(n, device=device) * (length_scale_range[1] - length_scale_range[0])
-    + length_scale_range[0]
-  )
-  s_wid = (
-    torch.rand(n, device=device) * (width_scale_range[1] - width_scale_range[0])
-    + width_scale_range[0]
-  )
+  def sample(rng: tuple[float, float]) -> torch.Tensor:
+    return torch.rand(n, device=device) * (rng[1] - rng[0]) + rng[0]
+
+  s_len = sample(length_scale_range)
+  s_wid = sample(width_scale_range)
+  s_thk = sample(thickness_scale_range)
   env.board_dims[env_ids, 0] = s_len
   env.board_dims[env_ids, 1] = s_wid
-  scale_xy1 = torch.stack([s_len, s_wid, torch.ones_like(s_len)], dim=-1)  # z fixed
+  env.board_dims[env_ids, 2] = s_thk
 
   model = env.sim.model  # torch views over the (expanded) warp model arrays
 
   # --- deck + marker boxes: size, bounding radius, aabb, marker position ---------
+  # Deck scales in all three axes; the marker keeps its own thickness (it is the
+  # grip-zone contact target riding the deck TOP, not part of the wood).
+  deck_half_new = cache["deck_half"].unsqueeze(0) * torch.stack([s_len, s_wid, s_thk], -1)
+  marker_half_new = cache["marker_half"].unsqueeze(0) * torch.stack(
+    [s_len, s_wid, torch.ones_like(s_len)], -1
+  )
+  # Marker slides with the tail (x scales), stays centered in y, and its z tracks
+  # the deck top so its top face stays exactly flush (the left_feet_board_contact
+  # sensor matches ONLY this geom — burying or beaching it breaks feet_off_board).
+  marker_pos = cache["marker_pos"].unsqueeze(0).repeat(n, 1)
+  marker_pos[:, 0] *= s_len
+  marker_pos[:, 2] = deck_half_new[:, 2] - marker_half_new[:, 2]
   # (aabb is (center, half-extents) in the GEOM frame -> center stays 0.)
-  for gid, half0 in ((deck, cache["deck_half"]), (marker, cache["marker_half"])):
-    half = half0.unsqueeze(0) * scale_xy1
+  for gid, half in ((deck, deck_half_new), (marker, marker_half_new)):
     model.geom_size[env_ids, gid] = half
     model.geom_rbound[env_ids, gid] = torch.linalg.norm(half, dim=-1)
     model.geom_aabb[env_ids, gid, 0] = 0.0
     model.geom_aabb[env_ids, gid, 1] = half
-  # Marker slides with the tail (x scales); y stays centered, z stays flush with
-  # the deck top (thickness unchanged in tier a).
-  marker_pos = cache["marker_pos"].unsqueeze(0).repeat(n, 1)
-  marker_pos[:, 0] *= s_len
   model.geom_pos[env_ids, marker] = marker_pos
 
   # --- tilt-body inertial: rescale like the compiler would -----------------------
-  # Both boxes share one density and thickness is fixed, so mass scales exactly by
-  # s_len*s_wid and the COM x-offset scales exactly by s_len. For inertia, ratio-
-  # scale the compiled nominal by the analytic composite (unit density — it cancels
-  # in the ratio, and the analytic masses carry the s_len*s_wid factor), preserving
-  # the compiler's principal-frame subtleties in the nominal.
+  # Both boxes share one density, so mass scales by total volume and COM/inertia
+  # follow the analytic 2-box composite (unit density — it cancels in the ratios;
+  # the analytic masses carry the per-box volume scaling). Ratio-scaling the
+  # compiled nominal preserves the compiler's principal-frame subtleties.
   vol = lambda h: 8.0 * h[..., 0] * h[..., 1] * h[..., 2]  # noqa: E731
-  deck_half_new = cache["deck_half"].unsqueeze(0) * scale_xy1
-  marker_half_new = cache["marker_half"].unsqueeze(0) * scale_xy1
-  inertia_new, _ = _box_composite_diag(
+  inertia_new, com_new = _box_composite_diag(
     vol(deck_half_new), deck_half_new,
     vol(marker_half_new), marker_half_new,
     marker_pos,
   )
   deck_half_nom = cache["deck_half"].unsqueeze(0)
   marker_half_nom = cache["marker_half"].unsqueeze(0)
-  inertia_nom, _ = _box_composite_diag(
+  inertia_nom, com_nom = _box_composite_diag(
     vol(deck_half_nom), deck_half_nom,
     vol(marker_half_nom), marker_half_nom,
     cache["marker_pos"].unsqueeze(0),
   )
-  model.body_mass[env_ids, tilt] = cache["tilt_mass"] * s_len * s_wid
+  vol_ratio = (vol(deck_half_new) + vol(marker_half_new)) / (
+    vol(deck_half_nom) + vol(marker_half_nom)
+  )
+  model.body_mass[env_ids, tilt] = cache["tilt_mass"] * vol_ratio
   # ratio is body-frame (x,y,z); permute to the principal order body_inertia uses.
   ratio_principal = (inertia_new / inertia_nom) @ cache["tilt_R2"]
   model.body_inertia[env_ids, tilt] = cache["tilt_inertia"].unsqueeze(0) * ratio_principal
-  ipos = cache["tilt_ipos"].unsqueeze(0).repeat(n, 1)
-  ipos[:, 0] *= s_len
-  model.body_ipos[env_ids, tilt] = ipos
+  # COM: the analytic composite reproduces the compiler to machine precision at
+  # nominal, so apply its delta to the compiled nominal.
+  model.body_ipos[env_ids, tilt] = cache["tilt_ipos"].unsqueeze(0) + (com_new - com_nom)
+
+  # --- robot spawn-z correction ---------------------------------------------------
+  # The spawn keyframe seats the on-board foot on the NOMINAL deck top; shift each
+  # env's spawn by its deck-top delta so spawns are exact at every thickness.
+  # Resets restore qpos from per-world qpos0 (absolute write => idempotent);
+  # default_root_state is kept consistent for any future reset_root_state_* event.
+  dz = cache["deck_half"][2] * (s_thk - 1.0)
+  model.qpos0[env_ids, cache["root_qadr"] + 2] = cache["root_z_nom"] + dz
+  env.scene["robot"].data.default_root_state[env_ids, 2] = cache["drs_z_nom"] + dz
