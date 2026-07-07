@@ -70,7 +70,11 @@ rising, broken-phase tracking rewards rising several-fold. If the canary is clea
 the real run; if not, tighten the trust region (`--agent.algorithm.desired-kl 0.005
 --agent.algorithm.clip-param 0.1` via passthrough args after `--`).
 
-## Monitoring cheat-sheet (tensorboard; calibrated healthy bands)
+Runs log to **wandb by default** (and always write local TB events, which is what
+the watchdog and the bands below read). A tensorboard-only trial can be uploaded
+after the fact with `scripts/sync_tb_to_wandb.py <run_dir> --name <name>`.
+
+## Monitoring cheat-sheet (tensorboard tags; calibrated healthy bands)
 
 | Tag | Healthy | Act when |
 |---|---|---|

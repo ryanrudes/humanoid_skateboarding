@@ -53,8 +53,10 @@ def main() -> None:
                   help="initial LR; default = the donor's annealed LR read from the checkpoint")
   ap.add_argument("--save-interval", type=int, default=50)
   ap.add_argument("--gpu", default=None, help="sets CUDA_VISIBLE_DEVICES")
-  ap.add_argument("--logger", default="tensorboard", choices=["tensorboard", "wandb"],
-                  help="tensorboard (default) keeps trial runs local")
+  ap.add_argument("--logger", default="wandb", choices=["wandb", "tensorboard"],
+                  help="wandb (default) logs to the cloud AND writes local TB events, so "
+                       "the watchdog keeps working; use tensorboard for throwaway local "
+                       "trials (retro-sync later with scripts/sync_tb_to_wandb.py)")
   ap.add_argument("--dry-run", action="store_true",
                   help="stage + print the command and monitoring cheat-sheet, don't launch")
   args, extra = ap.parse_known_args()
