@@ -225,8 +225,13 @@ def randomize_board_dims(
   model.body_ipos[env_ids, tilt] = cache["tilt_ipos"].unsqueeze(0) + (com_new - com_nom)
 
   # --- robot spawn-z correction ---------------------------------------------------
-  # The spawn keyframe seats the on-board foot on the NOMINAL deck top; shift each
-  # env's spawn by its deck-top delta so spawns are exact at every thickness.
+  # Shift each env's spawn by its deck-top delta so the keyframe's seating relative
+  # to the deck top is preserved at every thickness (exact for the X2, whose
+  # keyframe seats the on-board foot on the nominal top; run validate_board_dr.py
+  # against the G1 task before G1 training). A rigid root shift cannot fix both
+  # support surfaces: the DECK foot is anchored (it gates the feet_off_board
+  # termination sensor and presses on the free-floating board) and the GROUND foot
+  # inherits the +-2.5mm residual against static terrain, where it settles benignly.
   # Resets restore qpos from per-world qpos0 (absolute write => idempotent);
   # default_root_state is kept consistent for any future reset_root_state_* event.
   dz = cache["deck_half"][2] * (s_thk - 1.0)

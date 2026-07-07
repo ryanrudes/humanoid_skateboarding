@@ -32,7 +32,8 @@ import mjlab_husky.tasks  # noqa: F401
 from mjlab_husky.envs import G1SkaterManagerBasedRlEnv
 from mjlab_husky.tasks.registry import load_env_cfg
 
-TASK = "Mjlab-Skater-Flat-Agibot-X2"
+import sys
+TASK = sys.argv[1] if len(sys.argv) > 1 else "Mjlab-Skater-Flat-Agibot-X2"
 N = 8
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
@@ -130,19 +131,23 @@ def main() -> None:  # noqa: PLR0915
   env.reset()
   vd = mujoco.MjData(mjm)
 
-  def ondeck_gap(w: int) -> float:
+  def foot_gaps(w: int) -> tuple[float, float]:
+    """(on-deck foot vs per-world deck top, off-deck foot vs floor at z=0)."""
     vd.qpos[:] = sim.data.qpos[w].detach().cpu().numpy()
     mujoco.mj_forward(mjm, vd)
     dc = vd.geom_xpos[DECK]
     top = dc[2] + gs[w, DECK, 2]
-    best = 1e9
+    on, off = 1e9, 1e9
     for g in range(mjm.ngeom):
       nm = mujoco.mj_id2name(mjm, mujoco.mjtObj.mjOBJ_GEOM, g) or ""
       if "foot" in nm and nm.endswith("_collision") and nm.startswith("robot/"):
         p = vd.geom_xpos[g]
+        sole = p[2] - mjm.geom_size[g, 0]
         if abs(p[0] - dc[0]) < gs[w, DECK, 0] and abs(p[1] - dc[1]) < gs[w, DECK, 1]:
-          best = min(best, p[2] - mjm.geom_size[g, 0] - top)
-    return best
+          on = min(on, sole - top)
+        else:
+          off = min(off, sole)
+    return on, off
 
   # spawn-z correction: per-world qpos0 root z must equal nominal + deck-top delta
   q0 = sim.model.qpos0.cpu().numpy()
@@ -153,18 +158,34 @@ def main() -> None:  # noqa: PLR0915
   check("qpos0 robot spawn z shifted by deck-top delta", np.allclose(q0[:, jadr_r + 2], exp_z, atol=1e-6),
         f"max err {np.abs(q0[:, jadr_r + 2] - exp_z).max() * 1000:.3f}mm")
 
-  gaps0 = np.array([ondeck_gap(w) for w in range(N)])
+  g0 = np.array([foot_gaps(w) for w in range(N)])
   for _ in range(25):
     sim.step()
-  gaps1 = np.array([ondeck_gap(w) for w in range(N)])
-  print(f"    gap at reset  (mm): {np.round(gaps0 * 1000, 2).tolist()}")
-  print(f"    gap after 25 substeps (mm): {np.round(gaps1 * 1000, 2).tolist()}")
-  # spawn-z correction removes the thickness mismatch; residual is reset joint
-  # noise / foot pitch only
-  check("spawn gap at reset within +-2.5mm of surface", bool((np.abs(gaps0) < 2.5e-3).all()),
+  g1 = np.array([foot_gaps(w) for w in range(N)])
+  gaps0, gaps1 = g0[:, 0], g1[:, 0]
+  print(f"    deck-foot gap at reset   (mm): {np.round(gaps0 * 1000, 2).tolist()}")
+  print(f"    deck-foot gap settled    (mm): {np.round(gaps1 * 1000, 2).tolist()}")
+  print(f"    ground-foot gap at reset (mm): {np.round(g0[:, 1] * 1000, 2).tolist()}")
+  print(f"    ground-foot gap settled  (mm): {np.round(g1[:, 1] * 1000, 2).tolist()}")
+  # These gap bounds are NOISE characterizations, not correctness: reset_robot_joints
+  # (+-0.01 rad on every joint) alone can deflect a foot ~4mm (per-review Monte Carlo:
+  # a 2.5mm bound false-fails ~26% of RNG streams). The exact correctness assertion is
+  # the qpos0 check above. The deck-foot anchor also means the GROUND foot inherits
+  # the -dz mismatch (bounded +-2.5mm) — deliberate: the deck foot gates the
+  # feet_off_board termination sensor and pushes on the free-floating board, while
+  # the ground foot settles against static terrain.
+  check("deck-foot reset gap within noise bound (5mm)", bool((np.abs(gaps0) < 5e-3).all()),
         f"max |gap| {np.abs(gaps0).max() * 1000:.2f}mm")
-  check("foot settles onto per-world deck top", bool((gaps1 > -6e-3).all() and (gaps1 < 2e-3).all()),
+  check("deck foot settles onto per-world deck top", bool((gaps1 > -6e-3).all() and (gaps1 < 2.5e-3).all()),
         f"range [{gaps1.min() * 1000:.2f}, {gaps1.max() * 1000:.2f}]mm")
+  # PRE-EXISTING keyframe slop (not introduced by board DR): the ground foot spawns
+  # ~5-9mm into the floor at reset even at nominal dims — dz only modulates it by
+  # +-2.5mm — and soft contacts settle it within 25 substeps. Wide regression guard
+  # only; the settle check below is the meaningful assertion.
+  check("ground-foot reset gap within regression bound (12mm)", bool((np.abs(g0[:, 1]) < 12e-3).all()),
+        f"max |gap| {np.abs(g0[:, 1]).max() * 1000:.2f}mm")
+  check("ground foot settles onto floor", bool((g1[:, 1] > -6e-3).all() and (g1[:, 1] < 2.5e-3).all()),
+        f"range [{g1[:, 1].min() * 1000:.2f}, {g1[:, 1].max() * 1000:.2f}]mm")
 
   print("\n== 3. per-world contact ground truth (stale-rbound trap detector) ==")
   env.reset()
