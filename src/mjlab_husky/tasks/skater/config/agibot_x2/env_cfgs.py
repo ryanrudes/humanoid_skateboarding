@@ -207,4 +207,5 @@ def agibot_x2_skater_env_cfg(play: bool = False) -> G1SkaterManagerBasedRlEnvCfg
       "time_out": TerminationTermCfg(func=mdp.time_out, time_out=True),
     }
     cfg.events.pop("push_robot", None)
+    cfg.events.pop("board_dims", None)  # eval/video on the nominal board
   return cfg

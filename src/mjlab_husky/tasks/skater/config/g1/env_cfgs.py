@@ -167,6 +167,7 @@ def unitree_g1_skater_env_cfg(play: bool = False) -> G1SkaterManagerBasedRlEnvCf
       "time_out": TerminationTermCfg(func=mdp.time_out, time_out=True),
     }
     cfg.events.pop("push_robot", None)
+    cfg.events.pop("board_dims", None)  # eval/video on the nominal board
     # cfg.commands["skate"].ranges.lin_vel_x = (1.0, 1.0)  # pyright: ignore[reportAttributeAccessIssue]
     # cfg.commands["skate"].ranges.heading = (0.7, 0.7)  # pyright: ignore[reportAttributeAccessIssue]
   return cfg

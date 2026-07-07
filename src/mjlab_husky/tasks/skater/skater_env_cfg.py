@@ -231,11 +231,22 @@ def make_g1_skater_env_cfg() -> G1SkaterManagerBasedRlEnvCfg:
       func=mdp.randomize_field,
       domain_randomization=True,
       params={
-        "asset_cfg": SceneEntityCfg("skateboard", geom_names=(".*_wheel_collision",)), 
+        "asset_cfg": SceneEntityCfg("skateboard", geom_names=(".*_wheel_collision",)),
         "operation": "scale",
         "field": "geom_friction",
         "axes":[2],
         "ranges": (0.8, 1.6),
+      },
+    ),
+    # Per-env deck length/width DR (custom event: geom_size is not a randomize_field
+    # field, and size changes must atomically co-write rbound/aabb/marker/inertia
+    # from one sample — see mdp/events.py). Disabled in play cfgs (nominal board).
+    "board_dims": EventTermCfg(
+      mode="startup",
+      func=mdp.randomize_board_dims,
+      params={
+        "length_scale_range": (0.9, 1.1),
+        "width_scale_range": (0.9, 1.1),
       },
     ),
   }
