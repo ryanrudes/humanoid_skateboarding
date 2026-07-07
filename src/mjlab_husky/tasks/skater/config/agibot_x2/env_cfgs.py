@@ -25,8 +25,8 @@ from mjlab_husky.tasks.skater.skater_env_cfg import make_g1_skater_env_cfg
 
 def agibot_x2_skater_env_cfg(play: bool = False) -> G1SkaterManagerBasedRlEnvCfg:
   cfg = make_g1_skater_env_cfg()
-  # X2 has more collision geoms than the G1 (12 foot capsules per foot); give the
-  # contact/constraint buffers extra headroom.
+  # X2 foot sole = 6 capsules per foot (cf. G1's 7); give the contact/constraint
+  # buffers extra headroom over the base cfg.
   cfg.sim.njmax = 500
   cfg.sim.mujoco.ccd_iterations = 50
   cfg.sim.contact_sensor_maxmatch = 64
@@ -192,8 +192,8 @@ def agibot_x2_skater_env_cfg(play: bool = False) -> G1SkaterManagerBasedRlEnvCfg
     0.0, 0.0,                                    # head (yaw, pitch)
   ]
 
-  # X2 foot has 12 collision capsules per foot (G1: 7); widen the friction-event
-  # geom pattern to match.
+  # X2 foot sole = 6 collision capsules per foot (G1: 7); the friction-event geom
+  # pattern matches foot1..foot6 (the [1-9]|1[0-2] alternation still covers them).
   foot_friction = cfg.events["foot_friction"]
   foot_friction.params["asset_cfg"].geom_names = r"^(left|right)_foot([1-9]|1[0-2])_collision$"
 

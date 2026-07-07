@@ -14,7 +14,7 @@
       <default class="collision">
         <geom group="3" rgba=".2 .6 .2 .3" type="mesh" contype="1" conaffinity="1"/>
         <default class="foot_capsule">
-          <geom type="sphere" size="0.005"/>
+          <geom type="capsule" size="0.012"/>
         </default>
       </default>
     </default>
@@ -105,18 +105,19 @@
                   <site name="left_foot_2" pos="-0.06 0 -0.068" size="0.01"/>
                   <site name="left_foot_3" pos="0.04 0.06 -0.068" size="0.01"/>
                   <site name="left_foot_4" pos="0.04 -0.06 -0.068" size="0.01"/>
-                  <geom name="left_foot1_collision" class="foot_capsule" pos="-0.05 0.05 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="left_foot2_collision" class="foot_capsule" pos="-0.065 0.025 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="left_foot3_collision" class="foot_capsule" pos="-0.05 -0.05 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="left_foot4_collision" class="foot_capsule" pos="-0.065 -0.025 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="left_foot5_collision" class="foot_capsule" pos="0.11 0.05 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="left_foot6_collision" class="foot_capsule" pos="0.11 -0.05 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="left_foot7_collision" class="foot_capsule" pos="-0.02 -0.06 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="left_foot8_collision" class="foot_capsule" pos="-0.02 0.06 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="left_foot9_collision" class="foot_capsule" pos="0.07 -0.06 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="left_foot10_collision" class="foot_capsule" pos="0.07 0.06 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="left_foot11_collision" class="foot_capsule" pos="0.139 0 -0.066" rgba="1 0.5 0 1"/>
-                  <geom name="left_foot12_collision" class="foot_capsule" pos="0.128 0 -0.02" rgba="1 0.5 0 1"/>
+                  <!-- Sole = 6 overlapping longitudinal capsules (r=12mm) tracing the real
+                       foot footprint (x[-0.071,0.146], y[+-0.062], sole bottom z=-0.0734).
+                       Endpoints inset by r so the capped surface matches the real toe/heel
+                       without extending past it. Overlapping (20mm spacing < 24mm dia) they
+                       form a continuous 24mm-thick sole slab (> the 20mm skateboard deck),
+                       so the deck edge cannot slot between collision geoms and be straddled.
+                       Replaces the earlier 12 sparse r=5mm spheres. -->
+                  <geom name="left_foot1_collision" class="foot_capsule" fromto="-0.050 0.050 -0.0614 0.114 0.050 -0.0614" rgba="1 0.5 0 1"/>
+                  <geom name="left_foot2_collision" class="foot_capsule" fromto="-0.059 0.030 -0.0614 0.134 0.030 -0.0614" rgba="1 0.5 0 1"/>
+                  <geom name="left_foot3_collision" class="foot_capsule" fromto="-0.059 0.010 -0.0614 0.134 0.010 -0.0614" rgba="1 0.5 0 1"/>
+                  <geom name="left_foot4_collision" class="foot_capsule" fromto="-0.059 -0.010 -0.0614 0.134 -0.010 -0.0614" rgba="1 0.5 0 1"/>
+                  <geom name="left_foot5_collision" class="foot_capsule" fromto="-0.059 -0.030 -0.0614 0.134 -0.030 -0.0614" rgba="1 0.5 0 1"/>
+                  <geom name="left_foot6_collision" class="foot_capsule" fromto="-0.050 -0.050 -0.0614 0.114 -0.050 -0.0614" rgba="1 0.5 0 1"/>
                   <body name="left_foot_contact_point" pos="0 0 -0.073">
                     <inertial pos="0 0 0" mass="0.001" diaginertia="0.000001 0.000001 0.000001"/>
                     <site name="left_foot_contact_point" pos="0 0 0"/>
@@ -161,18 +162,13 @@
                   <site name="right_foot_2" pos="-0.06 0 -0.068" size="0.01"/>
                   <site name="right_foot_3" pos="0.04 0.06 -0.068" size="0.01"/>
                   <site name="right_foot_4" pos="0.04 -0.06 -0.068" size="0.01"/>
-                  <geom name="right_foot1_collision" class="foot_capsule" pos="-0.05 0.05 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="right_foot2_collision" class="foot_capsule" pos="-0.065 0.025 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="right_foot3_collision" class="foot_capsule" pos="-0.05 -0.05 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="right_foot4_collision" class="foot_capsule" pos="-0.065 -0.025 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="right_foot5_collision" class="foot_capsule" pos="0.11 0.05 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="right_foot6_collision" class="foot_capsule" pos="0.11 -0.05 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="right_foot7_collision" class="foot_capsule" pos="-0.02 -0.06 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="right_foot8_collision" class="foot_capsule" pos="-0.02 0.06 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="right_foot9_collision" class="foot_capsule" pos="0.07 -0.06 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="right_foot10_collision" class="foot_capsule" pos="0.07 0.06 -0.068" rgba="1 0.5 0 1"/>
-                  <geom name="right_foot11_collision" class="foot_capsule" pos="0.139 0 -0.066" rgba="1 0.5 0 1"/>
-                  <geom name="right_foot12_collision" class="foot_capsule" pos="0.128 0 -0.02" rgba="1 0.5 0 1"/>
+                  <!-- Sole capsules mirror the left foot (layout is symmetric in y). -->
+                  <geom name="right_foot1_collision" class="foot_capsule" fromto="-0.050 0.050 -0.0614 0.114 0.050 -0.0614" rgba="1 0.5 0 1"/>
+                  <geom name="right_foot2_collision" class="foot_capsule" fromto="-0.059 0.030 -0.0614 0.134 0.030 -0.0614" rgba="1 0.5 0 1"/>
+                  <geom name="right_foot3_collision" class="foot_capsule" fromto="-0.059 0.010 -0.0614 0.134 0.010 -0.0614" rgba="1 0.5 0 1"/>
+                  <geom name="right_foot4_collision" class="foot_capsule" fromto="-0.059 -0.010 -0.0614 0.134 -0.010 -0.0614" rgba="1 0.5 0 1"/>
+                  <geom name="right_foot5_collision" class="foot_capsule" fromto="-0.059 -0.030 -0.0614 0.134 -0.030 -0.0614" rgba="1 0.5 0 1"/>
+                  <geom name="right_foot6_collision" class="foot_capsule" fromto="-0.050 -0.050 -0.0614 0.114 -0.050 -0.0614" rgba="1 0.5 0 1"/>
                   <body name="right_foot_contact_point" pos="0 0 -0.073">
                     <inertial pos="0 0 0" mass="0.001" diaginertia="0.000001 0.000001 0.000001"/>
                     <site name="right_foot_contact_point" pos="0 0 0"/>
